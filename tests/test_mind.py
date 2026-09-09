@@ -64,8 +64,25 @@ def test_gateway_generate_structured_rejects_invalid_json(monkeypatch):
         gateway.generate_structured("Return JSON", {"status": "string"})
 
 
-def test_gateway_requires_api_key_at_call_time():
+def test_gateway_requires_api_key_at_call_time(monkeypatch):
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     gateway = Opus5Gateway(api_key=None)
 
     with pytest.raises(ConfigurationError, match="API key"):
         gateway.generate("This should fail.")
+
+
+def test_gateway_passes_workspace_header_when_configured(monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_WORKSPACE_ID", "workspace-123")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    gateway = Opus5Gateway(api_key="test-key")
+
+    response = Mock()
+    response.content = [Mock(type="text", text="ok")]
+
+    client = Mock()
+    client.messages.create.return_value = response
+    monkeypatch.setattr("mind.ai.Anthropic", lambda **kwargs: client)
+
+    assert gateway.generate("Hello") == "ok"
+    assert client.messages.create.call_args.kwargs["extra_headers"] == {"anthropic-workspace-id": "workspace-123"}

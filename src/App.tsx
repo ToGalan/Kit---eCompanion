@@ -79,6 +79,7 @@ function App() {
   const [occasionFilter, setOccasionFilter] = useState<string>('all');
   const [deletePreview, setDeletePreview] = useState<Array<{ kind: string; title: string; path: string }> | null>(null);
   const [isMobile, setIsMobile] = useState<boolean>(() => window.innerWidth <= 380);
+  const [isSending, setIsSending] = useState(false);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -217,17 +218,42 @@ function App() {
     ]);
   };
 
-  const handleSubmit = (event: React.FormEvent) => {
+  const handleSubmit = async (event: React.FormEvent) => {
     event.preventDefault();
     const value = query.trim();
-    if (!value) return;
+    if (!value || isSending) return;
 
-    const result = value.toLowerCase().includes('unknown')
-      ? 'I don’t see that work in the current record yet. I can help by tightening the medium and comparison question before I build a claim.'
-      : `I’ve turned “${value}” into a concrete comparison question: what does the user need, what is the signal, and what evidence would confirm the fit?`;
-
-    setMessages((current) => [...current, { id: crypto.randomUUID(), role: 'user', text: value }, { id: crypto.randomUUID(), role: 'assistant', text: result }]);
+    setIsSending(true);
+    const userMessage = { id: crypto.randomUUID(), role: 'user' as const, text: value };
+    setMessages((current) => [...current, userMessage]);
     setQuery('');
+
+    try {
+      const response = await fetch('/api/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message: value, history: messages }),
+      });
+
+      const payload = await response.json();
+      const answer = payload?.message || payload?.answer || 'The live model is unavailable right now.';
+
+      setMessages((current) => [
+        ...current,
+        { id: crypto.randomUUID(), role: 'assistant', text: answer },
+      ]);
+    } catch (error) {
+      setMessages((current) => [
+        ...current,
+        {
+          id: crypto.randomUUID(),
+          role: 'assistant',
+          text: 'The live AI is unavailable right now. Check the backend or configure the model key.',
+        },
+      ]);
+    } finally {
+      setIsSending(false);
+    }
   };
 
   const saveNote = async () => {
@@ -311,8 +337,9 @@ function App() {
                 value={query}
                 onChange={(event) => setQuery(event.target.value)}
                 placeholder="Tell me the title, the medium, and what you want to compare or test"
+                disabled={isSending}
               />
-              <button type="submit">Send</button>
+              <button type="submit" disabled={isSending}>{isSending ? 'Sending…' : 'Send'}</button>
             </form>
           </section>
 

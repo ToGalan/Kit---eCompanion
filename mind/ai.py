@@ -42,16 +42,26 @@ class Opus5Gateway:
         kwargs: dict[str, Any] = {
             "model": self.model,
             "messages": messages,
-            "temperature": temperature,
             "max_tokens": max_tokens,
         }
+        if temperature is not None:
+            kwargs["temperature"] = temperature
         if system is not None:
             kwargs["system"] = system
+        workspace_id = os.getenv("ANTHROPIC_WORKSPACE_ID")
+        if workspace_id:
+            kwargs["extra_headers"] = {"anthropic-workspace-id": workspace_id}
 
         for attempt in range(5):
             try:
                 response = client.messages.create(**kwargs)
                 return response
+            except TypeError as exc:  # Anthropic 1.x removed the legacy temperature argument.
+                if "temperature" not in str(exc):
+                    raise
+                kwargs.pop("temperature", None)
+                if attempt == 4:
+                    raise
             except Exception as exc:  # pragma: no cover - exercised through mocked HTTP layer in tests
                 status = getattr(exc, "status", None)
                 if status not in {429, 500, 502, 503, 504} or attempt == 4:

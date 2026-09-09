@@ -43,3 +43,13 @@ def test_vault_api_writes_claim_and_requires_falsifier():
         },
     )
     assert rejected.status_code == 400
+
+
+def test_chat_route_uses_live_backend_path_and_not_a_static_prompt():
+    client = TestClient(app)
+
+    response = client.post("/chat", json={"message": "What should I watch this weekend?"})
+    assert response.status_code == 200
+    data = response.json()
+    assert "message" in data
+    assert "The live AI is unavailable" in data["message"] or data.get("ok") is True

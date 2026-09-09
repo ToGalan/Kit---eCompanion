@@ -18,6 +18,7 @@ from pydantic import BaseModel
 
 from app.touchpoint import Touchpoint, TouchpointStore
 from kit.vault import Vault
+from mind.ai import Opus5Gateway
 from mind.obsidian_brain import ObsidianBrain
 
 MEDIA_DOMAINS = {
@@ -651,6 +652,27 @@ def reject_vault_note(payload: dict[str, Any]) -> dict[str, Any]:
 def export_vault() -> FileResponse:
     archive = vault.export()
     return FileResponse(path=str(archive), media_type="application/zip", filename=archive.name)
+
+
+@app.post("/chat")
+def chat(payload: dict[str, Any]) -> dict[str, Any]:
+    message = str(payload.get("message") or "").strip()
+    if not message:
+        raise HTTPException(status_code=400, detail="message is required")
+
+    try:
+        answer = Opus5Gateway().generate(
+            "You are Kit, an evidence-first companion. Answer the user with specific, grounded reasoning and mention uncertainty when appropriate.\n\nUser: "
+            + message
+        )
+    except Exception as exc:
+        return {
+            "ok": False,
+            "message": "The live AI is unavailable right now. Configure ANTHROPIC_API_KEY or check the backend model connection.",
+            "error": str(exc),
+        }
+
+    return {"ok": True, "message": answer.strip() or "I’m ready to answer, but I didn’t receive a model response."}
 
 
 @app.get("/health")

@@ -2,6 +2,13 @@
 
 Kit is a cross-media companion for tracking and interrogating media relationships across games, film, TV, anime, and music. Games are a particularly rich signal source, but the product is not limited to games and is designed to support broader media comparison and discovery work.
 
+**[PRINCIPLES.md](PRINCIPLES.md) governs this project.** It defines what Kit is
+for, what it will not do, and which of those decisions are settled. Read it
+before changing matching, storage, conversation or the creature. Clauses marked
+`[locked]` are not revisable through implementation choices; clauses marked
+`[open]` name work that is deliberately undecided. [VOICE.md](VOICE.md) is
+downstream of it and is enforced at runtime by `mind/voice.py`.
+
 This repository is a stubbed prototype and research scaffold, not a finished recommendation engine or production catalog integration. The browser signal layer captures domain-level hits and the app keeps an evidence-first reasoning loop, but the real provider integrations and model-backed matching are still planned rather than complete.
 
 ## Signal sources today vs planned
