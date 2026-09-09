@@ -1,34 +1,24 @@
 from __future__ import annotations
 
-import re
+from mind.embeddings import similarity
 
 
 def contradiction_found(left: str, right: str) -> bool:
-    left_norm = _normalize(left)
-    right_norm = _normalize(right)
-    if not left_norm or not right_norm:
+    if not left or not right:
         return False
 
-    left_tokens = set(left_norm.split())
-    right_tokens = set(right_norm.split())
-    shared = left_tokens & right_tokens
-    if len(shared) < 3:
+    subject_overlap = similarity(left, right)
+    if subject_overlap < 0.45:
         return False
 
-    left_pos = {word for word in left_norm.split() if word in {"hopeful", "renewal", "escape", "growth", "light", "freedom", "truth"}}
-    right_pos = {word for word in right_norm.split() if word in {"despairing", "decay", "entrapment", "darkness", "failure", "doom", "loss"}}
-    if left_pos and right_pos:
-        return True
+    left_hopeful = similarity(left, "hopeful")
+    left_despairing = similarity(left, "despairing")
+    right_hopeful = similarity(right, "hopeful")
+    right_despairing = similarity(right, "despairing")
 
-    return False
+    left_stance = left_hopeful - left_despairing
+    right_stance = right_hopeful - right_despairing
 
-
-def finish_model_allows_fit(verdicts: int) -> bool:
-    return verdicts >= 60
-
-
-def _normalize(text: str) -> str:
-    lowered = text.lower()
-    lowered = re.sub(r"[^a-z0-9\s]", " ", lowered)
-    lowered = re.sub(r"\s+", " ", lowered).strip()
-    return lowered
+    if abs(left_stance) < 0.05 or abs(right_stance) < 0.05:
+        return False
+    return left_stance * right_stance < 0.0

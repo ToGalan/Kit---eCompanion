@@ -5,6 +5,8 @@ description = "Kit media companion"
 requires-python = ">=3.12"
 dependencies = [
   "fastapi>=0.115.0",
+  "sentence-transformers>=2.7.0",
+  "anthropic>=0.45.0",
 ]
 
 [tool.pytest.ini_options]

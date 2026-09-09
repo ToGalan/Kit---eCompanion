@@ -21,8 +21,13 @@ class ObsidianBrain:
         return {"title": title, "path": str(note), "embedding": self.embedder.embed(body)}
 
     def summarize(self, title: str, body: str) -> str:
-        summary = self.model.generate(f"Summarize the claim structure for {title}: {body[:200]}")
-        return summary
+        try:
+            summary = self.model.generate(f"Summarize the claim structure for {title}: {body[:200]}")
+            if summary:
+                return summary
+        except Exception:
+            pass
+        return f"{title}: {body[:200]}"
 
     def route(self, prompt: str) -> str:
         lowered = prompt.lower()

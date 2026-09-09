@@ -1,16 +1,63 @@
 from __future__ import annotations
 
+import json
+import logging
 import re
+import subprocess
+import zipfile
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
+
+class Occasion:
+    def __init__(
+        self,
+        *,
+        time_of_day: str,
+        day_type: str,
+        session_length: str,
+        label: str | None = None,
+    ):
+        self.time_of_day = self._normalize_bucket(time_of_day, "time_of_day", {"morning", "afternoon", "evening", "night"})
+        self.day_type = self._normalize_bucket(day_type, "day_type", {"weekday", "weekend"})
+        self.session_length = self._normalize_bucket(session_length, "session_length", {"short", "medium", "open", "unknown"})
+        self.label = label.strip() if isinstance(label, str) and label.strip() else None
+
+    @staticmethod
+    def _normalize_bucket(value: str | None, field: str, allowed: set[str]) -> str:
+        if value is None or not str(value).strip():
+            raise ValueError(f"Occasion.{field} is required.")
+        normalized = str(value).strip().lower()
+        if normalized not in allowed:
+            raise ValueError(f"Occasion.{field} must be one of: {', '.join(sorted(allowed))}.")
+        return normalized
+
+    def as_dict(self) -> dict[str, str | None]:
+        return {
+            "time_of_day": self.time_of_day,
+            "day_type": self.day_type,
+            "session_length": self.session_length,
+            "label": self.label,
+        }
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, Occasion):
+            return NotImplemented
+        return self.as_dict() == other.as_dict()
+
+    def __hash__(self) -> int:
+        return hash(tuple(sorted(self.as_dict().items())))
 
 
 class Vault:
     def __init__(self, root: str | Path):
         self.path = Path(root)
         self.path.mkdir(parents=True, exist_ok=True)
-        for folder in ("claims", "works", "questions", "sources"):
+        for folder in ("claims", "works", "questions", "sources", "persona", "hypotheses"):
             (self.path / folder).mkdir(parents=True, exist_ok=True)
+        self.logger = logging.getLogger(__name__)
+        self._ensure_git_repo()
 
     def _slug(self, title: str) -> str:
         cleaned = re.sub(r"\s+", " ", (title or "untitled").strip())
@@ -28,8 +75,49 @@ class Vault:
             return ""
         return path.read_text(encoding="utf-8")
 
-    def _frontmatter(self, *, title: str, status: str = "proposed", dimension: str | None = None, falsifier: str | None = None, confidence: float | None = None, work: str | None = None, evidence: list[str] | None = None) -> str:
+    def _run_git(self, *args: str) -> subprocess.CompletedProcess[str] | None:
+        try:
+            return subprocess.run(
+                ["git", *args],
+                cwd=str(self.path),
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+        except Exception as exc:  # pragma: no cover - defensive logging path
+            self.logger.warning("git %s failed in %s: %s", " ".join(args), self.path, exc)
+            return None
+
+    def _ensure_git_repo(self) -> None:
+        if (self.path / ".git").exists():
+            return
+        if self._run_git("init") is None:
+            return
+        for key, value in {"user.name": "Kit Vault", "user.email": "vault@local"}.items():
+            self._run_git("config", key, value)
+
+    @staticmethod
+    def _iso_timestamp() -> str:
+        return datetime.now(timezone.utc).isoformat()
+
+    def _frontmatter(
+        self,
+        *,
+        title: str,
+        status: str = "proposed",
+        dimension: str | None = None,
+        falsifier: str | None = None,
+        confidence: float | None = None,
+        work: str | None = None,
+        evidence: list[str] | None = None,
+        updated: str | None = None,
+        layer: str | None = None,
+        source: str | None = None,
+        function: str | None = None,
+        occasion: Occasion | None = None,
+    ) -> str:
         lines = ["---", f"title: {title}", f"status: {status}"]
+        lines.append(f"updated: {updated or self._iso_timestamp()}")
         if dimension:
             lines.append(f"dimension: {dimension}")
         if falsifier:
@@ -40,6 +128,18 @@ class Vault:
             lines.append(f"work: {work}")
         if evidence:
             lines.append(f"evidence: [{', '.join(f'\"{item}\"' for item in evidence)}]")
+        if layer:
+            lines.append(f"layer: {layer}")
+        if source:
+            lines.append(f"source: {source}")
+        if function:
+            lines.append(f"function: {function}")
+        if occasion is not None:
+            lines.append(f"occasion_time_of_day: {occasion.time_of_day}")
+            lines.append(f"occasion_day_type: {occasion.day_type}")
+            lines.append(f"occasion_session_length: {occasion.session_length}")
+            if occasion.label:
+                lines.append(f"occasion_label: {occasion.label}")
         lines.append("---")
         return "\n".join(lines) + "\n\n"
 
@@ -84,16 +184,30 @@ class Vault:
         notes_block = existing_match.group(0).rstrip()
         return f"{new_body_text.rstrip()}\n\n{notes_block}\n"
 
-    def write_note(self, kind: str, title: str, content: str, **meta: Any) -> Path:
+    def _commit_note(self, kind: str, title: str, reason: str) -> None:
+        self._ensure_git_repo()
+        git_add = self._run_git("add", "-A")
+        if git_add is None:
+            return
+        message = f"{kind}/{title}: {reason}"
+        self._run_git("commit", "-m", message)
+
+    def write_note(self, kind: str, title: str, content: str, *, reason: str, **meta: Any) -> Path:
+        if not reason or not str(reason).strip():
+            raise ValueError("A note write requires a reason.")
+        meta.setdefault("updated", self._iso_timestamp())
         path = self._note_path(kind, title)
         existing = self._read_note(path)
         if existing:
             content = self._preserve_notes_section(existing, content)
         rendered = self._render_markdown(title=title, body=content, **meta)
         path.write_text(rendered, encoding="utf-8")
+        self._commit_note(kind, title, reason)
         return path
 
-    def rewrite_note(self, title: str, content: str, kind: str = "works") -> Path:
+    def rewrite_note(self, title: str, content: str, kind: str = "works", *, reason: str = "rewrite") -> Path:
+        if not reason or not str(reason).strip():
+            raise ValueError("A note write requires a reason.")
         path = self._note_path(kind, title)
         existing = self._read_note(path)
         body = content.strip()
@@ -103,30 +217,234 @@ class Vault:
         if not path.exists():
             path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(f"# {title}\n\n{body.strip()}\n", encoding="utf-8")
+        self._commit_note(kind, title, reason)
         return path
 
     def get_note(self, title: str, kind: str | None = None) -> dict[str, Any] | None:
-        for folder in ([kind] if kind else ["claims", "works", "questions", "sources"]):
+        for folder in ([kind] if kind else ["claims", "works", "questions", "sources", "persona", "hypotheses"]):
             target = self._note_path(folder, title)
             if target.exists():
                 content = target.read_text(encoding="utf-8")
                 return {"title": title, "path": str(target), "content": content, "kind": folder}
         return None
 
-    def write_work(self, title: str, content: str, **meta: Any) -> Path:
-        return self.write_note("works", title, content, **meta)
+    def _body_from_markdown(self, content: str) -> str:
+        if content.startswith("---\n"):
+            try:
+                end = content.index("\n---\n", 4)
+            except ValueError:
+                return content.strip()
+            content = content[end + 5 :]
+        body = re.sub(r"(?ms)^# .*?\n+", "", content.lstrip())
+        return body.strip()
 
-    def write_source(self, title: str, content: str, **meta: Any) -> Path:
-        return self.write_note("sources", title, content, **meta)
+    def write_persona_fact(
+        self,
+        title: str,
+        content: str,
+        *,
+        reason: str,
+        layer: str,
+        source: str,
+        confidence: float | None = None,
+    ) -> Path:
+        if layer not in {"elicited", "inferred", "observed"}:
+            raise ValueError("layer must be one of elicited, inferred, observed.")
+        if not source or not str(source).strip():
+            raise ValueError("A persona fact requires a source.")
+        return self.write_note(
+            "persona",
+            title,
+            content,
+            reason=reason,
+            status="active",
+            layer=layer,
+            source=source,
+            confidence=confidence,
+        )
 
-    def write_question(self, title: str, content: str, **meta: Any) -> Path:
-        return self.write_note("questions", title, content, **meta)
+    def write_hypothesis(
+        self,
+        title: str,
+        content: str,
+        *,
+        reason: str,
+        falsifier: str | None,
+        function: str,
+        evidence: list[str] | None = None,
+        confidence: float | None = None,
+        status: str = "proposed",
+        occasion: Occasion | None = None,
+    ) -> Path:
+        if not falsifier or not str(falsifier).strip():
+            raise ValueError("A claim requires a falsifier.")
+        if not function or not str(function).strip():
+            raise ValueError("A hypothesis requires a function.")
+        if occasion is None:
+            occasion = Occasion(
+                time_of_day="evening",
+                day_type="weekday",
+                session_length="short",
+                label="default",
+            )
+        return self.write_note(
+            "hypotheses",
+            title,
+            content,
+            reason=reason,
+            status=status,
+            falsifier=falsifier,
+            function=function,
+            evidence=evidence or [],
+            confidence=confidence,
+            occasion=occasion,
+        )
+
+    def _hypothesis_payload(self, path: Path, text: str) -> dict[str, Any]:
+        meta = self._parse_frontmatter(text)
+        occasion = {
+            "time_of_day": meta.get("occasion_time_of_day"),
+            "day_type": meta.get("occasion_day_type"),
+            "session_length": meta.get("occasion_session_length"),
+            "label": meta.get("occasion_label"),
+        }
+        return {
+            "title": path.stem,
+            "content": self._body_from_markdown(text),
+            "function": meta.get("function"),
+            "falsifier": meta.get("falsifier"),
+            "confidence": meta.get("confidence"),
+            "status": str(meta.get("status", "proposed")).lower(),
+            "updated": meta.get("updated"),
+            "occasion": occasion,
+        }
+
+    def persona_snapshot(self, occasion: Occasion | None = None) -> dict[str, Any]:
+        elicited: list[dict[str, Any]] = []
+        for path in sorted((self.path / "persona").glob("*.md")):
+            text = path.read_text(encoding="utf-8")
+            meta = self._parse_frontmatter(text)
+            if str(meta.get("layer", "")).lower() != "elicited":
+                continue
+            elicited.append(
+                {
+                    "title": path.stem,
+                    "content": self._body_from_markdown(text),
+                    "source": meta.get("source"),
+                    "confidence": meta.get("confidence"),
+                    "updated": meta.get("updated"),
+                }
+            )
+
+        if occasion is None:
+            return {"elicited": elicited}
+
+        active_hypotheses: list[dict[str, Any]] = []
+        for path in sorted((self.path / "hypotheses").glob("*.md")):
+            text = path.read_text(encoding="utf-8")
+            payload = self._hypothesis_payload(path, text)
+            status = payload["status"]
+            if status in {"rejected", "retired", "superseded", "archived"}:
+                continue
+            if payload["occasion"]["time_of_day"] != occasion.time_of_day:
+                continue
+            if payload["occasion"]["day_type"] != occasion.day_type:
+                continue
+            if payload["occasion"]["session_length"] != occasion.session_length:
+                continue
+            active_hypotheses.append(payload)
+
+        return {"elicited": elicited, "active_hypotheses": active_hypotheses}
+
+    def hypotheses_for(self, occasion: Occasion) -> dict[str, Any]:
+        ranked: list[dict[str, Any]] = []
+        untested: list[dict[str, Any]] = []
+        for path in sorted((self.path / "hypotheses").glob("*.md")):
+            text = path.read_text(encoding="utf-8")
+            payload = self._hypothesis_payload(path, text)
+            status = payload["status"]
+            if status in {"rejected", "retired", "superseded", "archived"}:
+                continue
+            if (
+                payload["occasion"]["time_of_day"] == occasion.time_of_day
+                and payload["occasion"]["day_type"] == occasion.day_type
+                and payload["occasion"]["session_length"] == occasion.session_length
+            ):
+                if payload["confidence"] is None:
+                    untested.append(payload)
+                else:
+                    ranked.append(payload)
+
+        ranked.sort(key=lambda item: float(item.get("confidence") or -1.0), reverse=True)
+        return {"occasion": occasion.as_dict(), "ranked": ranked, "untested": untested}
+
+    def history(self, title: str, kind: str) -> list[dict[str, Any]]:
+        path = self._note_path(kind, title)
+        rel = path.relative_to(self.path).as_posix()
+        result = self._run_git("log", "--pretty=format:%H%x1f%ct%x1f%s", "--", rel)
+        if result is None or not result.stdout.strip():
+            return []
+        history: list[dict[str, Any]] = []
+        for line in result.stdout.strip().splitlines():
+            commit, timestamp, subject = line.split("\x1f", 2)
+            reason = subject
+            prefix = f"{kind}/{title}: "
+            if reason.startswith(prefix):
+                reason = reason[len(prefix) :]
+            history.append(
+                {
+                    "commit": commit,
+                    "timestamp": datetime.fromtimestamp(int(timestamp), tz=timezone.utc).isoformat(),
+                    "reason": reason,
+                }
+            )
+        return history
+
+    def revision(self, title: str, kind: str, commit: str) -> str | None:
+        path = self._note_path(kind, title)
+        rel = path.relative_to(self.path).as_posix()
+        result = self._run_git("show", f"{commit}:{rel}")
+        if result is None:
+            return None
+        return result.stdout
+
+    def export(self) -> Path:
+        timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        archive_path = self.path.parent / f"{self.path.name}-{timestamp}.zip"
+        manifest = {
+            "vault": self.path.name,
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "files": [str(item.relative_to(self.path)).replace('\\', '/') for item in sorted(self.path.rglob("*")) if item.is_file()],
+        }
+        with zipfile.ZipFile(archive_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+            for file_path in sorted(self.path.rglob("*")):
+                if file_path.is_dir():
+                    continue
+                zf.write(file_path, arcname=file_path.relative_to(self.path).as_posix())
+            zf.writestr("manifest.json", json.dumps(manifest, indent=2, sort_keys=True))
+        return archive_path
+
+    def write_work(self, title: str, content: str, *, reason: str, **meta: Any) -> Path:
+        return self.write_note("works", title, content, reason=reason, **meta)
+
+    def write_persona(self, title: str, content: str, *, reason: str, **meta: Any) -> Path:
+        return self.write_note("persona", title, content, reason=reason, **meta)
+
+    def write_hypothesis_note(self, title: str, content: str, *, reason: str, **meta: Any) -> Path:
+        return self.write_note("hypotheses", title, content, reason=reason, **meta)
+
+    def write_source(self, title: str, content: str, *, reason: str, **meta: Any) -> Path:
+        return self.write_note("sources", title, content, reason=reason, **meta)
+
+    def write_question(self, title: str, content: str, *, reason: str, **meta: Any) -> Path:
+        return self.write_note("questions", title, content, reason=reason, **meta)
 
     def write_claim(
         self,
         title: str,
         content: str,
         *,
+        reason: str,
         falsifier: str | None,
         dimension: str | None = None,
         confidence: float | None = None,
@@ -140,6 +458,7 @@ class Vault:
             "claims",
             title,
             content,
+            reason=reason,
             status=status,
             dimension=dimension,
             falsifier=falsifier,
@@ -181,5 +500,5 @@ class Vault:
         return backlinks
 
 
-def write_claim(vault: Vault, *, title: str, content: str, falsifier: str | None, **kwargs: Any) -> Path:
-    return vault.write_claim(title=title, content=content, falsifier=falsifier, **kwargs)
+def write_claim(vault: Vault, *, title: str, content: str, reason: str, falsifier: str | None, **kwargs: Any) -> Path:
+    return vault.write_claim(title=title, content=content, reason=reason, falsifier=falsifier, **kwargs)

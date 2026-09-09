@@ -20,9 +20,9 @@ def test_opus_gateway_falls_back_cleanly_without_api_key():
     assert "evidence-first" in plan["strategy"]
 
 
-def test_deterministic_embedder_is_testable_without_torch():
-    from mind.embeddings import DeterministicEmbedder
+def test_stub_embedder_is_testable_without_model_download():
+    from mind.embeddings import StubEmbedder
 
-    vector = DeterministicEmbedder().embed("A hopeful story about escape.")
+    vector = StubEmbedder().embed("A hopeful story about escape.")
     assert len(vector) == 8
     assert all(isinstance(v, float) for v in vector)

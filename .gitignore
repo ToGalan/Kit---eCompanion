@@ -3,3 +3,9 @@ __pycache__/
 .venv/
 .ruff_cache/
 *.pyc
+node_modules/
+dist/
+*.tsbuildinfo
+.DS_Store
+.env
+.env.local

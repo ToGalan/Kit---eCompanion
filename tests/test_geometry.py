@@ -1,6 +1,6 @@
 import pytest
 
-from mind.geometry import contradiction_found, finish_model_allows_fit
+from mind.geometry import contradiction_found
 
 
 def test_contradiction_found_for_similar_opposite_claims():
@@ -10,6 +10,8 @@ def test_contradiction_found_for_similar_opposite_claims():
     assert contradiction_found(left, right) is True
 
 
-def test_finish_model_refuses_early_and_accepts_later():
-    assert finish_model_allows_fit(12) is False
-    assert finish_model_allows_fit(60) is True
+def test_contradiction_found_rejects_unrelated_text():
+    left = "The hero learns to be kind to the city."
+    right = "The weather is unusually warm today."
+
+    assert contradiction_found(left, right) is False
