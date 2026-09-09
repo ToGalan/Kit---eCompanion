@@ -1,0 +1,19 @@
+[project]
+name = "kit-companion"
+version = "0.1.0"
+description = "Kit media companion"
+requires-python = ">=3.12"
+dependencies = [
+  "fastapi>=0.115.0",
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
