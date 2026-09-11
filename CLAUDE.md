@@ -19,9 +19,12 @@ changing PRINCIPLES.md first is a defect.
   writable. Do not add a default occasion to make a write succeed.
 - **Popularity penalty** (4.6). `mind/matching.py` subtracts a popularity term
   when computing confidence. Nothing downstream may add popularity back, in any
-  form, including recency, trending or engagement weighting.
-- **Availability before ranking** (4.4). `mind/freshness.py` filters unreachable
-  candidates out before scoring, not after.
+  form, including recency, trending or engagement weighting. NOTE: the base score
+  it subtracts from is unbounded, so the penalty is currently swamped on any
+  persona with several facts. Fixing that is required, not optional.
+- **Availability before ranking** (4.4). `mind/freshness.py` defines
+  `availability_ok` and `verify_candidate`. NOTE: nothing calls either of them.
+  Clauses 4.4 and 4.5 are unenforced today. Wire them ahead of `match()`.
 - **Confidence is computed** (5.10). No literal confidence values in application
   code.
 - **Creature never decays** (7.3). `src/creature/logic.ts` derives growth from

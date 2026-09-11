@@ -16,7 +16,7 @@ class Recommendation:
 
 @dataclass
 class ReturnValue:
-    occasion: dict[str, str]
+    occasion: dict[str, str] | None
     previous_confidence: float
     current_confidence: float
     delta: float
@@ -101,7 +101,9 @@ def compounding_value(
             if title:
                 evidence.append(title)
     return ReturnValue(
-        occasion=occasion or {"time_of_day": "evening", "day_type": "weekday", "session_length": "short"},
+        # Unknown stays unknown; an invented occasion here would travel into the return
+        # value as though the moment had been established.
+        occasion=occasion,
         previous_confidence=previous,
         current_confidence=current,
         delta=delta,

@@ -310,3 +310,20 @@ def test_history_revision_and_export(temp_vault):
     with zipfile.ZipFile(zip_path, "r") as archive:
         assert "manifest.json" in archive.namelist()
         assert "works/The Matrix.md" in archive.namelist()
+
+
+def test_hypothesis_occasion_is_never_defaulted(temp_vault):
+    """A missing occasion is refused, not filled in with a plausible evening slot."""
+    with pytest.raises(ValueError, match="occasion"):
+        temp_vault.write_hypothesis(
+            title="No occasion",
+            content="This helps them unwind.",
+            reason="record hypothesis",
+            falsifier="Someone could test this.",
+            function="decompression",
+            evidence=[],
+            confidence=0.5,
+            status="active",
+        )
+
+    assert list((temp_vault.path / "hypotheses").glob("*.md")) == []

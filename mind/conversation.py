@@ -10,6 +10,7 @@ from typing import Any
 from kit.vault import Vault
 from mind.ai import Opus5Gateway
 from mind.elicitation import confirm_inference, generate_session_prompt
+from mind.tools import DEFAULT_TOOLS
 
 Intent = str
 
@@ -89,10 +90,47 @@ def _normalize_text(value: Any) -> str:
     return re.sub(r"\s+", " ", str(value or "")).strip()
 
 
+def _looks_like_url(text: str) -> bool:
+    return bool(re.search(r"https?://\S+", _normalize_text(text), flags=re.IGNORECASE))
+
+
+def _looks_like_title_question(text: str) -> bool:
+    text = _normalize_text(text)
+    if not text:
+        return False
+    if _looks_like_url(text):
+        return True
+    title_markers = [
+        "what is",
+        "who made",
+        "when did",
+        "where can i watch",
+        "where can i find",
+        "what album",
+        "what game",
+        "what movie",
+        "what show",
+        "what series",
+        "what anime",
+        "release date",
+        "watched",
+        "played",
+        "title",
+    ]
+    lowered = text.lower()
+    if "?" in text and any(marker in lowered for marker in title_markers):
+        return True
+    if re.search(r"\b(what|when|where|who|which)\b.*\b(movie|game|show|series|anime|album|song|title|release date|streaming|watch)\b", lowered):
+        return True
+    return False
+
+
 def _looks_like_direct_question(text: str) -> bool:
     text = _normalize_text(text)
     if not text:
         return False
+    if _looks_like_title_question(text):
+        return True
     return "?" in text or bool(re.search(r"\b(what|when|where|why|who|how|which|should|can|could|do|does|did|is|are)\b", text, flags=re.IGNORECASE))
 
 
@@ -167,23 +205,97 @@ def _specific_follow_up(offer: dict[str, Any] | None, *, user_input: str | None 
     return "I hear that. What would fit better instead?"
 
 
+def _tool_schema_block() -> str:
+    tools = []
+    for name, tool in DEFAULT_TOOLS.items():
+        schema = getattr(tool, "input_schema", {}) or {}
+        tools.append({
+            "name": name,
+            "description": getattr(tool, "description", ""),
+            "input_schema": schema,
+        })
+    return json.dumps(tools, ensure_ascii=False)
+
+
+def _resolve_title_or_url_tools(text: str) -> list[dict[str, Any]]:
+    results: list[dict[str, Any]] = []
+    url_match = re.search(r"https?://\S+", text, flags=re.IGNORECASE)
+    if url_match:
+        tool = DEFAULT_TOOLS.get("resolve_url")
+        if tool is not None:
+            results.append(tool.run(url=url_match.group(0)))
+        return results
+
+    query = re.sub(r"https?://\S+", " ", text, flags=re.IGNORECASE)
+    query = re.sub(r"[^A-Za-z0-9\s'\-]", " ", query)
+    query = " ".join(query.split())
+    if len(query) < 3:
+        return results
+
+    for name in ["steam_catalog", "igdb_lookup", "tmdb_lookup", "anilist_lookup", "musicbrainz_lookup", "web_search"]:
+        tool = DEFAULT_TOOLS.get(name)
+        if tool is not None:
+            try:
+                results.append(tool.run(query=query))
+            except Exception:
+                results.append({"tool": name, "ok": False, "error": "tool execution failed", "data": {}})
+    return results
+
+
+def _summarize_tool_results(results: list[dict[str, Any]]) -> str:
+    summarized: list[str] = []
+    for item in results:
+        if not isinstance(item, dict):
+            continue
+        if not item.get("ok"):
+            continue
+        data = item.get("data") or {}
+        if isinstance(data, dict):
+            if isinstance(data.get("tracks"), list):
+                tracks = ", ".join(str(track) for track in data["tracks"][:5])
+                summarized.append(f"{item.get('tool')}: {tracks}")
+            elif data.get("title"):
+                summarized.append(f"{item.get('tool')}: {data.get('title')}")
+    return "; ".join(summarized)
+
+
 def _direct_answer(user: str, text: str, *, persona_snapshot: dict[str, Any] | None = None, occasion: dict[str, Any] | None = None, state: ConversationState | None = None, gateway: Opus5Gateway | None = None) -> str:
     snapshot = persona_snapshot or {}
     occasion_payload = occasion or {"time_of_day": "evening", "day_type": "weekday", "session_length": "short"}
-    prompt = (
-        "Answer the user directly from the current persona evidence and occasion context. "
-        "Be concise, grounded, and practical. Do not ask a question in place of an answer.\n\n"
-        f"User: {text}\n"
-        f"Persona snapshot: {json.dumps(snapshot, ensure_ascii=False)}\n"
-        f"Occasion: {json.dumps(occasion_payload, ensure_ascii=False)}\n"
-    )
-    if gateway is not None:
-        try:
-            answer = gateway.generate(prompt, max_tokens=256)
-            if _normalize_text(answer):
-                return answer.strip()
-        except Exception:
-            pass
+    should_use_tools = _looks_like_title_question(text) or _looks_like_url(text)
+    tool_results = _resolve_title_or_url_tools(text) if should_use_tools else []
+    live_summary = _summarize_tool_results(tool_results)
+
+    if should_use_tools:
+        instructions = (
+            "Answer the user directly from the current persona evidence and occasion context. "
+            "Use the available tools for any question about a specific media title, work, release, platform, or URL. "
+            "If a tool result succeeds, cite the title or tracks it resolved and note the source tool. "
+            "If no tool succeeds, say that it could not reach that source right now. "
+            "Do not use a training cutoff disclaimer or recall-based answer for a title claim.\n\n"
+            f"User: {text}\n"
+            f"Persona snapshot: {json.dumps(snapshot, ensure_ascii=False)}\n"
+            f"Occasion: {json.dumps(occasion_payload, ensure_ascii=False)}\n"
+            f"Tool schemas: {_tool_schema_block()}\n"
+            f"Live results: {json.dumps(tool_results, ensure_ascii=False)}\n"
+        )
+        if gateway is not None:
+            try:
+                answer = gateway.generate(instructions, max_tokens=256)
+                if _normalize_text(answer):
+                    return answer.strip()
+            except Exception:
+                pass
+
+        if live_summary:
+            return f"I checked the live source and it resolved to: {live_summary}."
+
+        if any(item.get("ok") is False for item in tool_results if isinstance(item, dict)):
+            return "I could not reach that source right now."
+
+        if any(isinstance(item, dict) and item.get("ok") is True for item in tool_results):
+            return f"I checked the live source and it resolved to: {live_summary or 'the requested media.'}"
+
     lower_text = text.lower()
     context_bits = []
     if "listen" in lower_text:
@@ -222,7 +334,9 @@ def build_model_context(
     recent_turns = (state.last_turns or [])[-max_turns:]
     return {
         "user": state.user,
-        "occasion": occasion or {"time_of_day": "evening", "day_type": "weekday", "session_length": "short"},
+        # None means the occasion is not known yet, which is a different state from a
+        # weekday evening and must not be flattened into one.
+        "occasion": occasion,
         "persona_snapshot": persona_snapshot or {},
         "session_state": {
             "asked": state.asked,

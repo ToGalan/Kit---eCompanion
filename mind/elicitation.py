@@ -17,12 +17,20 @@ def _normalize_occasion(raw: Any) -> Occasion | None:
         return raw
     if not isinstance(raw, dict):
         return None
+    # Every field must be present. Filling a missing one in with "evening" or "short"
+    # invents context the user never gave, and it reads downstream as though they did.
+    time_of_day = str(raw.get("time_of_day") or "").strip()
+    day_type = str(raw.get("day_type") or "").strip()
+    session_length = str(raw.get("session_length") or "").strip()
+    if not (time_of_day and day_type and session_length):
+        return None
+    label = str(raw.get("label") or "").strip() or None
     try:
         return Occasion(
-            time_of_day=str(raw.get("time_of_day") or "evening"),
-            day_type=str(raw.get("day_type") or "weekday"),
-            session_length=str(raw.get("session_length") or "short"),
-            label=str(raw.get("label") or "session"),
+            time_of_day=time_of_day,
+            day_type=day_type,
+            session_length=session_length,
+            label=label,
         )
     except ValueError:
         return None

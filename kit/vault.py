@@ -10,6 +10,39 @@ from pathlib import Path
 from typing import Any
 
 
+def parse_frontmatter(content: str) -> dict[str, Any]:
+    """Read the YAML-ish frontmatter block off a note.
+
+    Public because the brain and the API both need to read a note's layer, source and
+    occasion without reaching into Vault internals.
+    """
+    if not content.startswith("---\n"):
+        return {}
+    try:
+        end = content.index("\n---\n", 4)
+    except ValueError:
+        return {}
+    parsed: dict[str, Any] = {}
+    for line in content[4:end].splitlines():
+        if ":" not in line:
+            continue
+        key, value = line.split(":", 1)
+        parsed[key.strip()] = value.strip()
+    return parsed
+
+
+def body_from_markdown(content: str) -> str:
+    """Return a note's prose with the frontmatter block and the H1 title removed."""
+    if content.startswith("---\n"):
+        try:
+            end = content.index("\n---\n", 4)
+        except ValueError:
+            return content.strip()
+        content = content[end + 5 :]
+    body = re.sub(r"(?ms)^# .*?\n+", "", content.lstrip())
+    return body.strip()
+
+
 class Occasion:
     def __init__(
         self,
@@ -144,20 +177,7 @@ class Vault:
         return "\n".join(lines) + "\n\n"
 
     def _parse_frontmatter(self, content: str) -> dict[str, Any]:
-        if not content.startswith("---\n"):
-            return {}
-        try:
-            end = content.index("\n---\n", 4)
-        except ValueError:
-            return {}
-        headers = content[4:end].splitlines()
-        parsed: dict[str, Any] = {}
-        for line in headers:
-            if ":" not in line:
-                continue
-            key, value = line.split(":", 1)
-            parsed[key.strip()] = value.strip()
-        return parsed
+        return parse_frontmatter(content)
 
     def _render_markdown(self, *, title: str, body: str, **meta: Any) -> str:
         frontmatter = self._frontmatter(title=title, **meta)
@@ -229,14 +249,7 @@ class Vault:
         return None
 
     def _body_from_markdown(self, content: str) -> str:
-        if content.startswith("---\n"):
-            try:
-                end = content.index("\n---\n", 4)
-            except ValueError:
-                return content.strip()
-            content = content[end + 5 :]
-        body = re.sub(r"(?ms)^# .*?\n+", "", content.lstrip())
-        return body.strip()
+        return body_from_markdown(content)
 
     def write_persona_fact(
         self,
@@ -281,12 +294,10 @@ class Vault:
         if not function or not str(function).strip():
             raise ValueError("A hypothesis requires a function.")
         if occasion is None:
-            occasion = Occasion(
-                time_of_day="evening",
-                day_type="weekday",
-                session_length="short",
-                label="default",
-            )
+            # A hypothesis states that content serving some function fits this person in
+            # this occasion. Without the occasion there is no claim, only a taste label,
+            # so this refuses rather than inventing a plausible-looking evening slot.
+            raise ValueError("A hypothesis requires an occasion.")
         return self.write_note(
             "hypotheses",
             title,

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import logging
 import os
 import re
 import sqlite3
@@ -20,6 +21,13 @@ from app.touchpoint import Touchpoint, TouchpointStore
 from kit.vault import Vault
 from mind.ai import Opus5Gateway
 from mind.obsidian_brain import ObsidianBrain
+from mind.voice import kit_system_prompt, validate_voice_copy
+
+logger = logging.getLogger(__name__)
+
+CHAT_UNAVAILABLE = (
+    "The live AI is unavailable right now. Configure ANTHROPIC_API_KEY or check the backend model connection."
+)
 
 MEDIA_DOMAINS = {
     "youtube.com",
@@ -314,8 +322,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-brain = ObsidianBrain(vault_root=Path("vault"))
 vault = Vault(Path("vault"))
+# One Vault instance, shared. Two would mean two git repos racing on the same directory.
+brain = ObsidianBrain(vault=vault)
 touchpoint_store = TouchpointStore()
 
 
@@ -655,29 +664,50 @@ def export_vault() -> FileResponse:
 
 
 @app.post("/chat")
-def chat(payload: dict[str, Any]) -> dict[str, Any]:
+def chat(payload: dict[str, Any], user: str = Depends(get_authenticated_user)) -> dict[str, Any]:
     message = str(payload.get("message") or "").strip()
     if not message:
         raise HTTPException(status_code=400, detail="message is required")
 
     try:
-        answer = Opus5Gateway().generate(
-            "You are Kit, an evidence-first companion. Answer the user with specific, grounded reasoning and mention uncertainty when appropriate.\n\nUser: "
-            + message
-        )
-    except Exception as exc:
+        # The voice spec is given to the model, not only enforced afterwards. Without it
+        # the model opens with the menus and capability lists VOICE.md rules 1-4 ban, and
+        # the guard then discards a perfectly reasonable answer.
+        answer = Opus5Gateway().generate(message, system=kit_system_prompt())
+    except Exception:
+        # The exception text can carry backend detail and configuration; it belongs in the
+        # server log, not in the response body.
+        logger.warning("chat generation failed for user %s", user, exc_info=True)
+        return {"ok": False, "message": CHAT_UNAVAILABLE}
+
+    answer = answer.strip()
+    if not answer:
+        logger.warning("chat generation returned empty content for user %s", user)
+        return {"ok": False, "message": CHAT_UNAVAILABLE}
+
+    # VOICE.md governs user-facing copy, and model output is user-facing copy.
+    violations = validate_voice_copy(answer)
+    if violations:
+        logger.warning("chat response violated the voice spec for user %s: %s", user, violations)
         return {
             "ok": False,
-            "message": "The live AI is unavailable right now. Configure ANTHROPIC_API_KEY or check the backend model connection.",
-            "error": str(exc),
+            "message": "That answer came back out of voice, so I am not going to send it. Ask me again and I will try a different route.",
+            "voice_violations": violations,
         }
 
-    return {"ok": True, "message": answer.strip() or "I’m ready to answer, but I didn’t receive a model response."}
+    return {"ok": True, "message": answer}
 
 
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok", "service": "kit"}
+
+
+@app.get("/auth/session")
+@app.post("/auth/session")
+def mint_session(user: str = "kit-user") -> dict[str, str]:
+    user = str(user or "kit-user").strip() or "kit-user"
+    return {"user": user, "token": make_session_token(user)}
 
 
 @app.get("/history")
@@ -706,18 +736,45 @@ def delete_history(user: str = Depends(get_authenticated_user)):
 
 
 @app.post("/brain/ingest")
-def ingest_brain(payload: dict[str, str]):
+def ingest_brain(payload: dict[str, Any], user: str = Depends(get_authenticated_user)):
     title = str(payload.get("title", "")).strip()
     body = str(payload.get("body", "")).strip()
     if not title or not body:
         raise HTTPException(status_code=400, detail="title and body are required")
-    return brain.ingest(title, body)
+    try:
+        return brain.ingest(
+            title,
+            body,
+            kind=str(payload.get("kind") or "works"),
+            reason=f"{user}: brain ingest",
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @app.post("/brain/route")
 def route_brain(payload: dict[str, str]):
     prompt = str(payload.get("prompt", "")).strip()
     return {"route": brain.route(prompt)}
+
+
+@app.get("/brain/links")
+def brain_links(title: str = Query(...), user: str = Depends(get_authenticated_user)) -> dict[str, Any]:
+    return {
+        "title": title,
+        "links": brain.links(title),
+        "backlinks": brain.backlinks(title),
+    }
+
+
+@app.get("/brain/related")
+def brain_related(
+    question: str = Query(...),
+    seed_title: str | None = Query(default=None),
+    limit: int = Query(default=5, ge=1, le=25),
+    user: str = Depends(get_authenticated_user),
+) -> dict[str, Any]:
+    return {"question": question, "related": brain.related(question, limit=limit, seed_title=seed_title)}
 
 
 @app.post("/touchpoint/start")

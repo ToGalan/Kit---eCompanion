@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import os
 import re
 import sqlite3
@@ -215,6 +216,14 @@ def _goal_for_dimension(dimension: str) -> str:
     return prompts.get(dimension, "media habits that have been most on your mind lately")
 
 
+FIRST_CONTACT_VARIANTS = [
+    "I'm Kit. What's the last thing you watched or played that actually stuck with you?",
+    "I'm Kit. Before I try to be useful: tell me one thing you loved recently. Film, game, album, anything.",
+    "I'm Kit. Rough question first. What's the last thing you gave up on halfway?",
+    "I'm Kit. What was the last thing that really held your attention?",
+]
+
+
 @dataclass
 class Touchpoint:
     user: str
@@ -265,6 +274,10 @@ class Touchpoint:
 
     @property
     def opening(self) -> str:
+        if self.days_since_contact <= 0:
+            index = int(hashlib.sha256(self.session_id.encode("utf-8")).hexdigest(), 16) % len(FIRST_CONTACT_VARIANTS)
+            return FIRST_CONTACT_VARIANTS[index]
+
         gap_text = ""
         if self.days_since_contact >= 7:
             gap_text = f"It’s been {self.days_since_contact} days since we last checked in, so I wanted to reconnect with a quick question."

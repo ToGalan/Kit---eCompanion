@@ -66,6 +66,39 @@ type NoteDetail = {
 const seedPicks: PickItem[] = [];
 
 const initialMessages: Message[] = [];
+const SESSION_KEY = 'kit-session-token';
+
+async function getSessionToken(): Promise<string> {
+  const savedToken = localStorage.getItem(SESSION_KEY);
+  if (savedToken) {
+    return savedToken;
+  }
+
+  const response = await fetch('/api/auth/session');
+  if (!response.ok) {
+    throw new Error('Failed to create a session token');
+  }
+
+  const payload = await response.json();
+  const token = typeof payload?.token === 'string' ? payload.token : null;
+  if (!token) {
+    throw new Error('No session token returned');
+  }
+
+  localStorage.setItem(SESSION_KEY, token);
+  return token;
+}
+
+async function authHeaders(includeJson: boolean = false): Promise<Record<string, string>> {
+  const token = await getSessionToken();
+  const headers: Record<string, string> = {
+    Authorization: `Bearer ${token}`,
+  };
+  if (includeJson) {
+    headers['Content-Type'] = 'application/json';
+  }
+  return headers;
+}
 
 function App() {
   const [route, setRoute] = useState<Route>('AI');
@@ -127,7 +160,8 @@ function App() {
     const node = graph.nodes.find((item) => item.id === selectedNodeId);
     if (!node) return;
     const params = new URLSearchParams({ kind: node.kind, title: node.label });
-    fetch(`/api/vault/note?${params.toString()}`)
+    authHeaders()
+      .then((headers) => fetch(`/api/vault/note?${params.toString()}`, { headers }))
       .then((response) => response.ok ? response.json() : null)
       .then((payload: NoteDetail | null) => {
         if (payload) {
@@ -231,7 +265,7 @@ function App() {
     try {
       const response = await fetch('/api/chat', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: await authHeaders(true),
         body: JSON.stringify({ message: value, history: messages }),
       });
 
@@ -261,7 +295,7 @@ function App() {
     const payload = { kind: note.kind, title: note.title, content: note.body };
     await fetch('/api/vault/note', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: await authHeaders(true),
       body: JSON.stringify(payload),
     });
   };
@@ -270,7 +304,7 @@ function App() {
     if (!note) return;
     const deleteResponse = await fetch('/api/vault/reject', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: await authHeaders(true),
       body: JSON.stringify({ kind: note.kind, title: note.title, preview: true }),
     });
     const payload = await deleteResponse.json();
@@ -283,7 +317,7 @@ function App() {
     if (!note) return;
     await fetch('/api/vault/reject', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: await authHeaders(true),
       body: JSON.stringify({ kind: note.kind, title: note.title, preview: false }),
     });
     setDeletePreview(null);
@@ -320,7 +354,7 @@ function App() {
             <div className="transcript" role="log" aria-live="polite">
               {messages.length === 0 ? (
                 <div className="message assistant">
-                  <span className="bubble">Start with what you want to compare or understand.</span>
+                  <span className="bubble">I'm Kit. What's the last thing you watched or played that actually stuck with you?</span>
                 </div>
               ) : (
                 messages.map((message) => (
@@ -336,7 +370,7 @@ function App() {
                 aria-label="Message input"
                 value={query}
                 onChange={(event) => setQuery(event.target.value)}
-                placeholder="Tell me the title, the medium, and what you want to compare or test"
+                placeholder="Tell me what you put on last night, and whether it did the job"
                 disabled={isSending}
               />
               <button type="submit" disabled={isSending}>{isSending ? 'Sending…' : 'Send'}</button>

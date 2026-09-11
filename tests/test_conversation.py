@@ -4,6 +4,7 @@ from pathlib import Path
 
 from kit.vault import Vault
 from mind.conversation import ConversationState, build_model_context, decide_turn
+from mind.tools import DEFAULT_TOOLS
 
 
 def test_direct_question_takes_priority_over_question_budget():
@@ -98,3 +99,60 @@ def test_model_context_only_sends_recent_turns_and_current_occasion():
     assert context["occasion"]["time_of_day"] == "evening"
     assert len(context["recent_turns"]) == 2
     assert context["recent_turns"][-1]["user"] == "four"
+
+
+def test_url_resolution_uses_live_tracks_in_answer(monkeypatch):
+    def fake_resolve_url(**kwargs):
+        return {
+            "tool": "resolve_url",
+            "source": "resolve_url",
+            "ok": True,
+            "fetched_at": "2026-01-01T00:00:00+00:00",
+            "data": {
+                "kind": "playlist",
+                "title": "Spotify playlist",
+                "tracks": ["Heatwaves - Glass Animals", "Dreams - Fleetwood Mac"],
+            },
+        }
+
+    monkeypatch.setitem(DEFAULT_TOOLS, "resolve_url", type("T", (), {"run": staticmethod(fake_resolve_url)})())
+    decision = decide_turn(
+        "https://open.spotify.com/playlist/abc123",
+        user="alice",
+        persona_snapshot={"elicited": [{"title": "quiet drift", "content": "I like calm music"}]},
+        occasion={"time_of_day": "evening", "day_type": "weekday", "session_length": "short"},
+    )
+
+    assert decision.intent == "ANSWER"
+    assert "Heatwaves" in decision.message
+    assert "Dreams" in decision.message
+    assert "training cutoff" not in decision.message.lower()
+
+
+def test_title_question_with_failed_tools_says_could_not_reach_and_not_cutoff(monkeypatch):
+    for name in ["steam_catalog", "igdb_lookup", "tmdb_lookup", "anilist_lookup", "musicbrainz_lookup", "web_search"]:
+        monkeypatch.setitem(
+            DEFAULT_TOOLS,
+            name,
+            type("T", (), {"run": staticmethod(lambda **kwargs: {"tool": name, "ok": False, "error": "timed out", "data": {}})})(),
+        )
+
+    decision = decide_turn(
+        "What is the release date of The Matrix?",
+        user="alice",
+        persona_snapshot={"elicited": [{"title": "quiet drift", "content": "I like calm music"}]},
+        occasion={"time_of_day": "evening", "day_type": "weekday", "session_length": "short"},
+    )
+
+    assert decision.intent == "ANSWER"
+    assert "could not reach that source right now" in decision.message.lower()
+    assert "training cutoff" not in decision.message.lower()
+    assert "remember" not in decision.message.lower()
+
+
+def test_model_context_reports_an_unknown_occasion_as_unknown():
+    from mind.conversation import ConversationState, build_model_context
+
+    context = build_model_context(ConversationState(user="brian"))
+
+    assert context["occasion"] is None

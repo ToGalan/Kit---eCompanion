@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from kit.vault import Vault
+from kit.vault import Occasion, Vault
 from mind.matching import Match, match
 
 
@@ -23,6 +23,12 @@ def test_match_reads_persona_from_vault_and_prefers_function_fit_over_popularity
         evidence=["touchpoint-session-1"],
         confidence=0.8,
         status="active",
+        occasion=Occasion(
+            time_of_day="evening",
+            day_type="weekday",
+            session_length="short",
+            label="after work",
+        ),
     )
 
     persona_snapshot = vault.persona_snapshot()

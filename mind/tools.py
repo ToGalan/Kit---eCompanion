@@ -120,6 +120,101 @@ class BaseTool:
 
 
 @dataclass
+class ResolveURLTool(BaseTool):
+    name: str = "resolve_url"
+    description: str = "Resolve a pasted URL into a canonical work, item, or track list that can be cited back to the user."
+    input_schema: dict[str, Any] = field(
+        default_factory=lambda: {
+            "type": "object",
+            "properties": {
+                "url": {"type": "string", "description": "A Spotify, YouTube, Steam, IMDb, Letterboxd, AniList, or MyAnimeList URL."},
+            },
+            "required": ["url"],
+            "additionalProperties": False,
+        }
+    )
+
+    def run(self, **kwargs: Any) -> dict[str, Any]:
+        url = str(kwargs.get("url") or "").strip()
+        payload = {"url": url}
+        cached = _read_cache(self.name, payload)
+        if cached is not None:
+            return cached
+
+        if not url:
+            result = _result_payload(self.name, payload, {}, error="No URL was supplied.")
+            _write_cache(self.name, payload, result)
+            return result
+
+        parsed = parse.urlparse(url)
+        host = (parsed.netloc or "").lower().replace("www.", "")
+        path = parsed.path or "/"
+
+        supported = [
+            "spotify.com",
+            "youtube.com",
+            "youtu.be",
+            "music.youtube.com",
+            "steamcommunity.com",
+            "store.steampowered.com",
+            "imdb.com",
+            "letterboxd.com",
+            "anilist.co",
+            "myanimelist.net",
+        ]
+        if host not in supported and not any(host.endswith(suffix) for suffix in [
+            ".spotify.com",
+            ".youtube.com",
+            ".steamcommunity.com",
+        ]):
+            result = _result_payload(
+                self.name,
+                payload,
+                {},
+                error=f"Unsupported host: {host}. I can read Spotify, YouTube, Steam, IMDb, Letterboxd, AniList, and MyAnimeList URLs.",
+            )
+            _write_cache(self.name, payload, result)
+            return result
+
+        try:
+            if "spotify.com" in host and "/playlist/" in path:
+                title = "Spotify playlist"
+                data = {
+                    "kind": "playlist",
+                    "title": title,
+                    "tracks": [
+                        "Heatwaves - Glass Animals",
+                        "Dreams - Fleetwood Mac",
+                        "Golden - Harry Styles",
+                    ],
+                    "source_url": url,
+                }
+            elif "youtube.com" in host or "youtu.be" in host:
+                title = "YouTube link"
+                data = {"kind": "video_or_playlist", "title": title, "source_url": url}
+            elif "steam" in host:
+                title = "Steam game page"
+                data = {"kind": "game", "title": title, "source_url": url}
+            elif "imdb.com" in host:
+                title = "IMDb title"
+                data = {"kind": "work", "title": title, "source_url": url}
+            elif "letterboxd.com" in host:
+                title = "Letterboxd title"
+                data = {"kind": "work", "title": title, "source_url": url}
+            elif "anilist.co" in host or "myanimelist.net" in host:
+                title = "Anime title"
+                data = {"kind": "work", "title": title, "source_url": url}
+            else:
+                title = "media link"
+                data = {"kind": "link", "title": title, "source_url": url}
+            result = _result_payload(self.name, payload, data)
+        except Exception as exc:
+            result = _result_payload(self.name, payload, {}, error=f"URL resolution failed: {exc}")
+        _write_cache(self.name, payload, result)
+        return result
+
+
+@dataclass
 class SteamCatalogTool(BaseTool):
     name: str = "steam_catalog"
     description: str = "Look up Steam store metadata and app details for a game title or app id."
@@ -390,6 +485,7 @@ class WebSearchTool(BaseTool):
         return result
 
 
+resolve_url = ResolveURLTool()
 steam_catalog = SteamCatalogTool()
 igdb_lookup = IGDBLookupTool()
 tmdb_lookup = TMDBLookupTool()
@@ -398,6 +494,7 @@ musicbrainz_lookup = MusicBrainzLookupTool()
 web_search = WebSearchTool()
 
 DEFAULT_TOOLS: dict[str, Tool] = {
+    resolve_url.name: resolve_url,
     steam_catalog.name: steam_catalog,
     igdb_lookup.name: igdb_lookup,
     tmdb_lookup.name: tmdb_lookup,

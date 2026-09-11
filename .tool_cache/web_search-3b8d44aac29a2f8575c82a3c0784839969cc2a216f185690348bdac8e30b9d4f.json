@@ -1,0 +1,11 @@
+{
+  "args": {
+    "query": "What should I listen to this evening"
+  },
+  "data": {},
+  "error": "No search API key is configured; web_search is disabled.",
+  "fetched_at": "2026-09-10T02:17:01.466235+00:00",
+  "ok": false,
+  "source": "web_search",
+  "tool": "web_search"
+}
