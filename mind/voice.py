@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
-from typing import Any
 
 VOICE_BANNED_PATTERNS = [
     "i love you",

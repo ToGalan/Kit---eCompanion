@@ -298,8 +298,7 @@ button, input {
   padding: 0.85rem 1rem;
 }
 
-.composer button,
-.pick-card {
+.composer button {
   cursor: pointer;
 }
 
@@ -309,35 +308,6 @@ button, input {
   background: linear-gradient(135deg, #7c5cff, #4fb7ff);
   color: white;
   padding: 0.85rem 1rem;
-}
-
-.pick-panel {
-  width: 360px;
-  display: flex;
-  flex-direction: column;
-  gap: 0.75rem;
-}
-
-.pick-card {
-  display: flex;
-  flex-direction: column;
-  gap: 0.4rem;
-  text-align: left;
-  background: rgba(255, 255, 255, 0.02);
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 16px;
-  color: #edf0ff;
-  padding: 1rem;
-}
-
-.pick-card strong {
-  font-size: 1rem;
-}
-
-.pick-card span,
-.pick-card small,
-.pick-card em {
-  opacity: 0.9;
 }
 
 .brain-layout {
@@ -605,11 +575,6 @@ button, input {
   .brain-layout {
     grid-template-columns: 1fr;
     display: block;
-  }
-
-  .pick-panel {
-    width: 100%;
-    margin-top: 1rem;
   }
 }
 

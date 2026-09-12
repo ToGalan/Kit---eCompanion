@@ -15,3 +15,7 @@ dist/
 vault/
 data/
 *.db
+
+# Runtime tool-response cache. It expires by volatility (4.3); a committed copy
+# never does, and it is third-party data besides.
+.tool_cache/

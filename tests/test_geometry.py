@@ -1,4 +1,3 @@
-import pytest
 
 from mind.geometry import contradiction_found
 

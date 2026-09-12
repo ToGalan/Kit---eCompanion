@@ -4,20 +4,12 @@ import hashlib
 import hmac
 import os
 import sqlite3
-from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
 from fastapi import Depends, FastAPI, Header, HTTPException
 
-from app.browser_signal import app as browser_app, get_authenticated_user, make_session_token
-
-
-try:
-    from app.browser_signal import app as _browser_app
-except Exception:  # pragma: no cover
-    _browser_app = None
 
 
 def make_admin_token(user: str = "admin") -> str:

@@ -5,7 +5,7 @@ import logging
 from typing import Any
 
 from mind.ai import Opus5Gateway
-from mind.tools import DEFAULT_TOOLS, Tool
+from mind.tools import DEFAULT_TOOLS
 
 logger = logging.getLogger(__name__)
 

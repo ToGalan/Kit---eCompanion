@@ -4,14 +4,6 @@ import Creature from './creature';
 
 type Route = 'AI' | 'Obsidian';
 
-type PickItem = {
-  id: string;
-  label: string;
-  reason: string;
-  wrongIf: string;
-  probe: string;
-};
-
 type Message = {
   id: string;
   role: 'assistant' | 'user';
@@ -69,9 +61,6 @@ type NoteDetail = {
   confidence: number;
 };
 
-const seedPicks: PickItem[] = [];
-
-const initialMessages: Message[] = [];
 const SESSION_KEY = 'kit-session-token';
 
 async function getSessionToken(): Promise<string> {
@@ -108,7 +97,7 @@ async function authHeaders(includeJson: boolean = false): Promise<Record<string,
 
 function App() {
   const [route, setRoute] = useState<Route>('AI');
-  const [messages, setMessages] = useState<Message[]>(initialMessages);
+  const [messages, setMessages] = useState<Message[]>([]);
   const [query, setQuery] = useState('');
   const [backendStatus, setBackendStatus] = useState<'checking' | 'live' | 'offline'>('checking');
   const [graph, setGraph] = useState<VaultGraph>({ nodes: [], edges: [] });
@@ -211,7 +200,6 @@ function App() {
       });
   }, [selectedNodeId, graph.nodes]);
 
-  const picks = useMemo(() => seedPicks, []);
   const persona = useMemo(
     () => ({
       elicited: [
@@ -270,25 +258,6 @@ function App() {
 
     return { nodes, edges };
   }, [visibleEdges, visibleNodes, isMobile]);
-
-  const handlePick = (pick: PickItem) => {
-    const produced =
-      pick.probe === 'elicitation'
-        ? 'I’m grounding the work in the title, the medium, and the specific comparison context before I assess fit or mismatch.'
-        : pick.probe === 'produce'
-          ? 'I’ve framed the comparison as a concrete evidence question: what signal matters, what is missing, and what could explain the fit.'
-          : 'I’m checking whether the same signal is being described in conflicting ways before treating it as a contradiction.';
-
-    setMessages((current) => [
-      ...current,
-      { id: crypto.randomUUID(), role: 'user', text: pick.label },
-      {
-        id: crypto.randomUUID(),
-        role: 'assistant',
-        text: `Probe: ${pick.probe}. Reason: ${pick.reason} Wrong if: ${pick.wrongIf} Produced response: ${produced}`,
-      },
-    ]);
-  };
 
   const handleSubmit = async (event: React.FormEvent) => {
     event.preventDefault();
@@ -419,19 +388,6 @@ function App() {
               <button type="submit" disabled={isSending}>{isSending ? 'Sending…' : 'Send'}</button>
             </form>
           </section>
-
-          {picks.length > 0 ? (
-            <aside className="pick-panel" aria-label="Suggested picks">
-              {picks.map((pick) => (
-                <button key={pick.id} type="button" className="pick-card" onClick={() => handlePick(pick)}>
-                  <strong>{pick.label}</strong>
-                  <span>{pick.reason}</span>
-                  <small>Wrong if: {pick.wrongIf}</small>
-                  <em>Probe: {pick.probe}</em>
-                </button>
-              ))}
-            </aside>
-          ) : null}
         </main>
       ) : (
         <main className="brain-layout" aria-label="Obsidian route">
