@@ -5,7 +5,7 @@ from unittest.mock import Mock
 
 import pytest
 
-from mind.ai import ConfigurationError, Opus5Gateway
+from mind.ai import SAMPLING_PARAMETERS, ConfigurationError, Opus5Gateway
 from mind.brain import check_line, run_turn, validate_claim
 
 
@@ -52,6 +52,65 @@ def test_gateway_generate_uses_anthropic_sdk_and_parses_text(monkeypatch):
 
     assert gateway.generate("Summarize the claim.") == "The model answered with reasoning."
     client.messages.create.assert_called_once()
+
+
+def test_gateway_never_sends_a_sampling_parameter(monkeypatch):
+    # Opus 5 rejects temperature/top_p/top_k with a 400, which is not retryable, so one
+    # of these in the payload fails every request and surfaces as "model unavailable".
+    captured: dict[str, object] = {}
+
+    response = Mock()
+    response.content = [Mock(type="text", text="answered")]
+    client = Mock()
+    client.messages.create.side_effect = lambda **kwargs: captured.update(kwargs) or response
+    monkeypatch.setattr("mind.ai.Anthropic", lambda **kwargs: client)
+
+    gateway = Opus5Gateway(api_key="test-key")
+    gateway.generate("Summarize the claim.", system="be brief")
+    assert not SAMPLING_PARAMETERS & set(captured)
+
+    captured.clear()
+    gateway.converse([{"role": "user", "content": "hello"}])
+    assert not SAMPLING_PARAMETERS & set(captured)
+
+    captured.clear()
+    response.content = [Mock(type="text", text='{"status": "ok"}')]
+    gateway.generate_structured("Return JSON", {"status": "string"})
+    assert not SAMPLING_PARAMETERS & set(captured)
+
+
+def test_gateway_converse_sends_the_whole_conversation(monkeypatch):
+    captured: dict[str, object] = {}
+    response = Mock()
+    response.content = [Mock(type="text", text="answered")]
+    client = Mock()
+    client.messages.create.side_effect = lambda **kwargs: captured.update(kwargs) or response
+    monkeypatch.setattr("mind.ai.Anthropic", lambda **kwargs: client)
+
+    Opus5Gateway(api_key="test-key").converse(
+        [
+            # A recalled conversation can open on something Kit said; the API cannot.
+            {"role": "assistant", "content": "dropped, the API needs a user turn first"},
+            {"role": "user", "content": "earlier question"},
+            {"role": "assistant", "content": "earlier answer"},
+            {"role": "user", "content": "follow-up"},
+        ],
+        system="be brief",
+    )
+
+    assert captured["messages"] == [
+        {"role": "user", "content": "earlier question"},
+        {"role": "assistant", "content": "earlier answer"},
+        {"role": "user", "content": "follow-up"},
+    ]
+    assert captured["system"] == "be brief"
+
+
+def test_gateway_converse_requires_a_user_turn(monkeypatch):
+    monkeypatch.setattr("mind.ai.Anthropic", lambda **kwargs: Mock())
+
+    with pytest.raises(ValueError, match="user message"):
+        Opus5Gateway(api_key="test-key").converse([{"role": "assistant", "content": "only me"}])
 
 
 def test_gateway_generate_structured_rejects_invalid_json(monkeypatch):

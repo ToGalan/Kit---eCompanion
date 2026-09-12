@@ -189,7 +189,6 @@ def run_turn(
                 # must not be able to crash the turn on an unserializable value.
                 json.dumps(payload, sort_keys=True, default=str),
                 {"type": "object", "properties": {"tool_calls": {"type": "array"}, "final_answer": {"type": "string"}}, "additionalProperties": True},
-                temperature=0.1,
             )
         except Exception:
             # Degrade to the offline answer, but leave a trace: a missing API key and a

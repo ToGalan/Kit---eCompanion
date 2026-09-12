@@ -43,6 +43,12 @@ class ConfigurationError(RuntimeError):
 # is raised immediately rather than retried.
 RETRYABLE_STATUS = frozenset({429, 500, 502, 503, 504})
 
+# Opus 5 runs adaptive thinking by default and rejects the sampling parameters
+# (temperature, top_p, top_k) with a 400. Sending one fails every request, and a 400 is
+# not retryable, so the failure surfaces as "the model is unavailable" rather than as the
+# bad request it is. Depth is tuned with effort instead; nothing here may add a sampler.
+SAMPLING_PARAMETERS = frozenset({"temperature", "top_p", "top_k"})
+
 # max_tokens covers thinking plus the visible answer on models that think by default,
 # so a small ceiling can be spent entirely on thinking and return no text at all.
 # 16000 is the recommended non-streaming default; it stays under the SDK HTTP timeout.
@@ -79,6 +85,26 @@ def _text_from_response(response: Any) -> str:
         if getattr(block, "type", None) == "text":
             chunks.append(getattr(block, "text", "") or "")
     return "".join(chunks)
+
+
+def _prepare_messages(messages: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
+    """Normalise a turn list into what the Messages API accepts.
+
+    Empty turns are dropped and the list is trimmed to start on a user turn, because a
+    recalled conversation can legitimately begin with something Kit said.
+    """
+    prepared: list[dict[str, Any]] = []
+    for entry in messages or []:
+        if not isinstance(entry, dict):
+            continue
+        role = str(entry.get("role") or "").strip().lower()
+        content = str(entry.get("content") or "").strip()
+        if role not in {"user", "assistant"} or not content:
+            continue
+        prepared.append({"role": role, "content": content})
+    while prepared and prepared[0]["role"] != "user":
+        prepared.pop(0)
+    return prepared
 
 
 def _strip_code_fence(text: str) -> str:
@@ -118,7 +144,6 @@ class Opus5Gateway:
         *,
         messages: list[dict[str, Any]],
         system: str | None = None,
-        temperature: float,
         max_tokens: int,
         effort: str | None = None,
     ):
@@ -133,8 +158,6 @@ class Opus5Gateway:
         # budget_tokens is rejected on this model.
         if effort:
             kwargs["output_config"] = {"effort": effort}
-        if temperature is not None:
-            kwargs["temperature"] = temperature
         if system is not None:
             kwargs["system"] = system
         workspace_id = os.getenv("ANTHROPIC_WORKSPACE_ID")
@@ -145,13 +168,6 @@ class Opus5Gateway:
         for attempt in range(5):
             try:
                 return client.messages.create(**kwargs)
-            except TypeError as exc:  # Anthropic 1.x removed the legacy temperature argument.
-                # Only worth retrying while temperature is still in the payload; otherwise
-                # the TypeError came from somewhere else and retrying loops for nothing.
-                if "temperature" not in str(exc) or "temperature" not in kwargs:
-                    raise
-                kwargs.pop("temperature", None)
-                last_exc = exc
             except Exception as exc:  # pragma: no cover - exercised through mocked HTTP layer in tests
                 if _status_of(exc) not in RETRYABLE_STATUS or attempt == 4:
                     raise
@@ -164,7 +180,6 @@ class Opus5Gateway:
         self,
         prompt: str,
         *,
-        temperature: float = 0.0,
         max_tokens: int = DEFAULT_MAX_TOKENS,
         effort: str | None = None,
         system: str | None = None,
@@ -172,7 +187,31 @@ class Opus5Gateway:
         response = self._request(
             messages=[{"role": "user", "content": prompt}],
             system=system,
-            temperature=temperature,
+            max_tokens=max_tokens,
+            effort=effort,
+        )
+        return _text_from_response(response)
+
+    def converse(
+        self,
+        messages: list[dict[str, Any]],
+        *,
+        system: str | None = None,
+        max_tokens: int = DEFAULT_MAX_TOKENS,
+        effort: str | None = None,
+    ) -> str:
+        """Answer within a conversation rather than from a single isolated prompt.
+
+        The API is stateless, so prior turns are sent as turns. Passing them as real
+        user/assistant messages rather than pasting a transcript into one prompt is what
+        lets the model treat earlier answers as its own.
+        """
+        prepared = _prepare_messages(messages)
+        if not prepared:
+            raise ValueError("converse requires at least one user message.")
+        response = self._request(
+            messages=prepared,
+            system=system,
             max_tokens=max_tokens,
             effort=effort,
         )
@@ -183,7 +222,6 @@ class Opus5Gateway:
         prompt: str,
         schema: Any,
         *,
-        temperature: float = 0.0,
         max_tokens: int = DEFAULT_MAX_TOKENS,
         effort: str | None = None,
     ) -> Any:
@@ -195,7 +233,6 @@ class Opus5Gateway:
         response = self._request(
             messages=[{"role": "user", "content": content}],
             system=_STRUCTURED_SYSTEM,
-            temperature=temperature,
             max_tokens=max_tokens,
             effort=effort,
         )
