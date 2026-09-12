@@ -18,6 +18,12 @@ type Message = {
   text: string;
 };
 
+type RecalledTurn = {
+  speaker: 'user' | 'kit';
+  text: string;
+  timestamp: string;
+};
+
 type GraphNode = {
   id: string;
   kind: string;
@@ -113,6 +119,7 @@ function App() {
   const [deletePreview, setDeletePreview] = useState<Array<{ kind: string; title: string; path: string }> | null>(null);
   const [isMobile, setIsMobile] = useState<boolean>(() => window.innerWidth <= 380);
   const [isSending, setIsSending] = useState(false);
+  const [sessionId, setSessionId] = useState<string | null>(null);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -146,6 +153,37 @@ function App() {
       });
 
     return () => controller.abort();
+  }, []);
+
+  // The transcript lives in the vault, so a reload resumes the thread instead of
+  // starting a conversation Kit already had.
+  useEffect(() => {
+    let cancelled = false;
+
+    authHeaders()
+      .then((headers) => fetch('/api/chat/memory', { headers }))
+      .then((response) => (response.ok ? response.json() : null))
+      .then((payload: { session_id?: string; turns?: RecalledTurn[] } | null) => {
+        if (cancelled || !payload) return;
+        if (payload.session_id) {
+          setSessionId(payload.session_id);
+        }
+        const recalled = (payload.turns ?? []).map((turn) => ({
+          id: crypto.randomUUID(),
+          role: turn.speaker === 'kit' ? ('assistant' as const) : ('user' as const),
+          text: turn.text,
+        }));
+        if (recalled.length > 0) {
+          setMessages(recalled);
+        }
+      })
+      .catch(() => {
+        // No recall is an empty transcript, not a broken page.
+      });
+
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   useEffect(() => {
@@ -266,11 +304,16 @@ function App() {
       const response = await fetch('/api/chat', {
         method: 'POST',
         headers: await authHeaders(true),
-        body: JSON.stringify({ message: value, history: messages }),
+        // No client-side history: the server replays the vault, which is the record of
+        // what was actually said.
+        body: JSON.stringify(sessionId ? { message: value, session_id: sessionId } : { message: value }),
       });
 
       const payload = await response.json();
       const answer = payload?.message || payload?.answer || 'The live model is unavailable right now.';
+      if (payload?.session_id) {
+        setSessionId(payload.session_id);
+      }
 
       setMessages((current) => [
         ...current,

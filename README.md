@@ -33,6 +33,25 @@ npm test -- --run
 npm run dev -- --host 0.0.0.0
 ```
 
+## Memory
+
+Chat memory is the vault. Every exchange is written to
+`vault/conversations/<session>.md`, and the durable statements inside it accumulate as
+persona facts in `vault/persona/`, each carrying its layer (`elicited`, `observed`,
+`inferred`), the evidence behind it and a computed confidence that rises as the evidence
+does. There is no second store: what Kit recalls on the next turn is what the markdown
+says, which is why the transcript is readable and editable in Obsidian like everything
+else.
+
+Two kinds of turn are never written anywhere, however useful they look: one expressing
+serious distress (7.5) and one stating something about health, sexuality, religion,
+politics or immigration status (6.6). Kit still answers; it just keeps no record.
+
+The working vault and the signal databases hold real user data, so they stay out of git
+(6.7). Set `KIT_VAULT_PATH`, `KIT_DB_PATH`, `KIT_TOUCHPOINT_DB_PATH` and
+`KIT_METRICS_DB_PATH` to put them somewhere else; the test suite points all four at a
+temporary directory so a run never touches the repository.
+
 ## Notes
 
 The vault is markdown on disk and intentionally compatible with Obsidian. The app is designed to treat the Markdown files as the source of truth rather than as a database layer.

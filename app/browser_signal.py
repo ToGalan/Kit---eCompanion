@@ -18,7 +18,8 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 from app.touchpoint import Touchpoint, TouchpointStore
-from kit.vault import Vault
+from kit.vault import Occasion, parse_evidence
+from mind import memory
 from mind.ai import Opus5Gateway
 from mind.obsidian_brain import ObsidianBrain
 from mind.voice import kit_system_prompt, validate_voice_copy
@@ -322,8 +323,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-vault = Vault(Path("vault"))
-# One Vault instance, shared. Two would mean two git repos racing on the same directory.
+# KIT_VAULT_PATH keeps the working vault off the repository (6.7). One Vault instance,
+# shared. Two would mean two git repos racing on the same directory.
+vault = memory.default_vault()
 brain = ObsidianBrain(vault=vault)
 touchpoint_store = TouchpointStore()
 
@@ -386,20 +388,7 @@ def _wikilinks_in_text(text: str) -> list[str]:
 
 
 def _parse_evidence(value: Any) -> list[str]:
-    if value is None:
-        return []
-    if isinstance(value, list):
-        return [str(item).strip() for item in value if str(item).strip()]
-    text = str(value).strip()
-    if not text or text == "[]":
-        return []
-    matches = re.findall(r'"([^"]+)"|\'([^\']+)\'', text)
-    if matches:
-        values = []
-        for first, second in matches:
-            values.append((first or second).strip())
-        return [item for item in values if item]
-    return [segment.strip().strip("[]") for segment in text.split(",") if segment.strip()]
+    return parse_evidence(value)
 
 
 def _build_vault_graph() -> dict[str, Any]:
@@ -663,27 +652,51 @@ def export_vault() -> FileResponse:
     return FileResponse(path=str(archive), media_type="application/zip", filename=archive.name)
 
 
+def _current_occasion(user: str) -> Occasion | None:
+    """The occasion Kit is reasoning inside, or None when it cannot be derived.
+
+    None is a real state and is passed through as one. Substituting a plausible weekday
+    evening would write an occasion the user never had onto everything downstream.
+    """
+    try:
+        inference = store.current_occasion(user)
+    except Exception:
+        logger.warning("could not derive the current occasion for user %s", user, exc_info=True)
+        return None
+    return getattr(inference, "occasion", None)
+
+
 @app.post("/chat")
 def chat(payload: dict[str, Any], user: str = Depends(get_authenticated_user)) -> dict[str, Any]:
     message = str(payload.get("message") or "").strip()
     if not message:
         raise HTTPException(status_code=400, detail="message is required")
 
+    session_id = str(payload.get("session_id") or "").strip() or memory.session_id_for(user)
+    occasion = _current_occasion(user)
+    # Memory is read from the vault, not from the client. The browser posts its own
+    # transcript, but a client-supplied history is a client-supplied claim about what
+    # Kit said, and the vault is the record.
+    recalled = memory.recall(vault, user, session_id=session_id, occasion=occasion)
+
     try:
         # The voice spec is given to the model, not only enforced afterwards. Without it
         # the model opens with the menus and capability lists VOICE.md rules 1-4 ban, and
         # the guard then discards a perfectly reasonable answer.
-        answer = Opus5Gateway().generate(message, system=kit_system_prompt())
+        answer = Opus5Gateway().converse(
+            memory.conversation_messages(recalled) + [{"role": "user", "content": message}],
+            system="\n\n---\n\n".join([kit_system_prompt(), memory.memory_block(recalled)]),
+        )
     except Exception:
         # The exception text can carry backend detail and configuration; it belongs in the
         # server log, not in the response body.
         logger.warning("chat generation failed for user %s", user, exc_info=True)
-        return {"ok": False, "message": CHAT_UNAVAILABLE}
+        return {"ok": False, "message": CHAT_UNAVAILABLE, "session_id": session_id}
 
     answer = answer.strip()
     if not answer:
         logger.warning("chat generation returned empty content for user %s", user)
-        return {"ok": False, "message": CHAT_UNAVAILABLE}
+        return {"ok": False, "message": CHAT_UNAVAILABLE, "session_id": session_id}
 
     # VOICE.md governs user-facing copy, and model output is user-facing copy.
     violations = validate_voice_copy(answer)
@@ -693,9 +706,41 @@ def chat(payload: dict[str, Any], user: str = Depends(get_authenticated_user)) -
             "ok": False,
             "message": "That answer came back out of voice, so I am not going to send it. Ask me again and I will try a different route.",
             "voice_violations": violations,
+            "session_id": session_id,
         }
 
-    return {"ok": True, "message": answer}
+    try:
+        recorded = memory.record_exchange(
+            vault,
+            user,
+            session_id=session_id,
+            user_text=message,
+            kit_text=answer,
+            occasion=occasion,
+        )
+    except Exception:
+        # A storage failure loses the memory, not the answer the person is waiting for.
+        logger.warning("could not record the exchange for user %s", user, exc_info=True)
+        recorded = {"recorded": False, "reason": "write failed", "facts": []}
+
+    return {"ok": True, "message": answer, "session_id": session_id, "memory": recorded}
+
+
+@app.get("/chat/memory")
+def chat_memory(
+    session_id: str | None = Query(default=None),
+    user: str = Depends(get_authenticated_user),
+) -> dict[str, Any]:
+    """What Kit remembers, so the person can see it and the UI can resume the thread."""
+    resolved = str(session_id or "").strip() or memory.session_id_for(user)
+    recalled = memory.recall(vault, user, session_id=resolved, occasion=_current_occasion(user))
+    return {
+        "session_id": resolved,
+        "occasion": recalled["occasion"],
+        "turns": recalled["turns"],
+        "facts": recalled["facts"],
+        "hypotheses": recalled["hypotheses"],
+    }
 
 
 @app.get("/health")
@@ -726,7 +771,16 @@ def add_history(
         return {"error": "unsupported signal"}
     if event.timezone:
         store.set_user_timezone(user, event.timezone)
-    return store.record(user, event.domain, event.signal, timestamp=event.timestamp, timezone_name=event.timezone)
+    recorded = store.record(user, event.domain, event.signal, timestamp=event.timestamp, timezone_name=event.timezone)
+
+    # Signal accumulates into the brain as it arrives, so the persona is the sum of what
+    # was recorded rather than a separate tally the vault never sees.
+    try:
+        observed = memory.compile_observed_facts(vault, user, store.history_for(user))
+    except Exception:
+        logger.warning("could not compile observed facts for user %s", user, exc_info=True)
+        observed = []
+    return {**recorded, "observed_facts": observed}
 
 
 @app.delete("/history")

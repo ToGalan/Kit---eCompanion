@@ -9,3 +9,9 @@ dist/
 .DS_Store
 .env
 .env.local
+
+# 6.7: signal stores are not source control. The working vault now holds conversation
+# transcripts and persona facts, so it never enters the repository.
+vault/
+data/
+*.db

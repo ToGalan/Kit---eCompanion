@@ -32,7 +32,26 @@ changing PRINCIPLES.md first is a defect.
   time term and there must never be one. Absence is not punished.
 - **Writes carry reasons** (6.3). Every vault write commits with a reason.
 - **No user data in git** (6.7). Real vaults, signal stores and databases stay
-  out of the repository.
+  out of the repository. `vault/` and `data/` are ignored, and `tests/conftest.py`
+  points every store at a temporary directory so a test run cannot write into the
+  working tree.
+- **Memory is the vault** (6.1). `mind/memory.py` records every exchange to
+  `vault/conversations/` and compiles persona facts out of it. There is no second
+  store and no hidden context buffer: if it is not in the markdown, Kit does not
+  know it on the next turn.
+- **Nothing about distress or a protected category is filed** (7.5, 6.6).
+  `mind/memory.py:screen_turn` refuses the write — the persona fact and the
+  transcript both, because a transcript is storage too. Do not add an exception
+  for a turn that looks useful.
+- **Confidence accumulates, it is not asserted** (5.10).
+  `mind/memory.py:confidence_from_evidence` combines evidence as a noisy-OR and
+  never reaches certainty. NOTE: `app/touchpoint.py` and `mind/elicitation.py`
+  still write literal confidences (0.8, 0.85, 0.9, 0.6). Those are defects; route
+  them through the computed path rather than adding more.
+- **No sampling parameters on the gateway.** `mind/ai.py:SAMPLING_PARAMETERS` names
+  what Opus 5 rejects with a 400. A `temperature` in the payload fails every
+  request, and the chat route reports that failure to the user as "the live AI is
+  unavailable". Tune depth with effort instead.
 
 ## Things that look like improvements and are not
 

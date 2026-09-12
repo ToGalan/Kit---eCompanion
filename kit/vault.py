@@ -31,6 +31,25 @@ def parse_frontmatter(content: str) -> dict[str, Any]:
     return parsed
 
 
+def parse_evidence(value: Any) -> list[str]:
+    """Read an evidence list back off frontmatter.
+
+    Frontmatter is flat text, so the list written as `["a", "b"]` comes back as a
+    string. Public because evidence counts are what confidence is computed from.
+    """
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return [str(item).strip() for item in value if str(item).strip()]
+    text = str(value).strip()
+    if not text or text == "[]":
+        return []
+    quoted = re.findall(r'"([^"]*)"', text)
+    if quoted:
+        return [item.strip() for item in quoted if item.strip()]
+    return [segment.strip().strip("[]\"'") for segment in text.split(",") if segment.strip().strip("[]\"'")]
+
+
 def body_from_markdown(content: str) -> str:
     """Return a note's prose with the frontmatter block and the H1 title removed."""
     if content.startswith("---\n"):
@@ -41,6 +60,13 @@ def body_from_markdown(content: str) -> str:
         content = content[end + 5 :]
     body = re.sub(r"(?ms)^# .*?\n+", "", content.lstrip())
     return body.strip()
+
+
+# A transcript line. Written one turn per line so the note stays a readable markdown
+# document in Obsidian and still parses back into turns without a second store.
+_TURN_LINE = re.compile(r"^- (?P<timestamp>\S+) \*\*(?P<speaker>user|kit)\*\*: (?P<text>.*)$")
+
+SPEAKERS = ("user", "kit")
 
 
 class Occasion:
@@ -87,7 +113,7 @@ class Vault:
     def __init__(self, root: str | Path):
         self.path = Path(root)
         self.path.mkdir(parents=True, exist_ok=True)
-        for folder in ("claims", "works", "questions", "sources", "persona", "hypotheses"):
+        for folder in ("claims", "works", "questions", "sources", "persona", "hypotheses", "conversations"):
             (self.path / folder).mkdir(parents=True, exist_ok=True)
         self.logger = logging.getLogger(__name__)
         self._ensure_git_repo()
@@ -148,6 +174,7 @@ class Vault:
         source: str | None = None,
         function: str | None = None,
         occasion: Occasion | None = None,
+        user: str | None = None,
     ) -> str:
         lines = ["---", f"title: {title}", f"status: {status}"]
         lines.append(f"updated: {updated or self._iso_timestamp()}")
@@ -165,6 +192,8 @@ class Vault:
             lines.append(f"layer: {layer}")
         if source:
             lines.append(f"source: {source}")
+        if user:
+            lines.append(f"user: {user}")
         if function:
             lines.append(f"function: {function}")
         if occasion is not None:
@@ -241,7 +270,7 @@ class Vault:
         return path
 
     def get_note(self, title: str, kind: str | None = None) -> dict[str, Any] | None:
-        for folder in ([kind] if kind else ["claims", "works", "questions", "sources", "persona", "hypotheses"]):
+        for folder in ([kind] if kind else ["claims", "works", "questions", "sources", "persona", "hypotheses", "conversations"]):
             target = self._note_path(folder, title)
             if target.exists():
                 content = target.read_text(encoding="utf-8")
@@ -250,6 +279,93 @@ class Vault:
 
     def _body_from_markdown(self, content: str) -> str:
         return body_from_markdown(content)
+
+    def append_conversation_turns(
+        self,
+        session_id: str,
+        turns: list[tuple[str, str]],
+        *,
+        user: str,
+        reason: str,
+        occasion: Occasion | None = None,
+        timestamp: str | None = None,
+    ) -> Path:
+        """Append an exchange to this session's transcript note.
+
+        The whole exchange lands in one commit, so the vault history reads as a
+        conversation rather than as a stream of half turns.
+        """
+        session = re.sub(r"\s+", " ", str(session_id or "")).strip()
+        if not session:
+            raise ValueError("A conversation turn requires a session id.")
+        if not user or not str(user).strip():
+            raise ValueError("A conversation turn requires a user.")
+
+        stamp = timestamp or self._iso_timestamp()
+        lines: list[str] = []
+        for speaker, text in turns:
+            speaker_name = str(speaker or "").strip().lower()
+            if speaker_name not in SPEAKERS:
+                raise ValueError(f"speaker must be one of: {', '.join(SPEAKERS)}.")
+            # Collapsed to a single line: the transcript is parsed back line by line, and
+            # a turn that spans lines would read as several turns on the way in.
+            spoken = re.sub(r"\s+", " ", str(text or "")).strip()
+            if not spoken:
+                continue
+            lines.append(f"- {stamp} **{speaker_name}**: {spoken}")
+        if not lines:
+            raise ValueError("A conversation turn requires text.")
+
+        existing = self._read_note(self._note_path("conversations", session))
+        body = body_from_markdown(existing) if existing else ""
+        combined = "\n".join([part for part in [body.strip(), "\n".join(lines)] if part])
+
+        return self.write_note(
+            "conversations",
+            session,
+            combined,
+            reason=reason,
+            status="active",
+            user=str(user).strip(),
+            occasion=occasion,
+        )
+
+    def conversation_turns(self, session_id: str, *, limit: int | None = None) -> list[dict[str, Any]]:
+        """Read a session transcript back as turns, oldest first."""
+        session = re.sub(r"\s+", " ", str(session_id or "")).strip()
+        if not session:
+            return []
+        content = self._read_note(self._note_path("conversations", session))
+        if not content:
+            return []
+        turns: list[dict[str, Any]] = []
+        for line in body_from_markdown(content).splitlines():
+            found = _TURN_LINE.match(line.strip())
+            if found is None:
+                continue
+            turns.append(
+                {
+                    "speaker": found.group("speaker"),
+                    "text": found.group("text").strip(),
+                    "timestamp": found.group("timestamp"),
+                }
+            )
+        if limit is not None and limit >= 0:
+            return turns[-limit:] if limit else []
+        return turns
+
+    def conversation_sessions(self, *, user: str | None = None) -> list[dict[str, Any]]:
+        """Every recorded session, most recently updated first."""
+        wanted = str(user).strip() if user else None
+        sessions: list[dict[str, Any]] = []
+        for path in sorted((self.path / "conversations").glob("*.md")):
+            meta = self._parse_frontmatter(path.read_text(encoding="utf-8"))
+            owner = str(meta.get("user") or "").strip()
+            if wanted is not None and owner != wanted:
+                continue
+            sessions.append({"session_id": path.stem, "user": owner, "updated": meta.get("updated") or ""})
+        sessions.sort(key=lambda item: str(item.get("updated") or ""), reverse=True)
+        return sessions
 
     def write_persona_fact(
         self,
@@ -260,6 +376,8 @@ class Vault:
         layer: str,
         source: str,
         confidence: float | None = None,
+        evidence: list[str] | None = None,
+        user: str | None = None,
     ) -> Path:
         if layer not in {"elicited", "inferred", "observed"}:
             raise ValueError("layer must be one of elicited, inferred, observed.")
@@ -274,6 +392,8 @@ class Vault:
             layer=layer,
             source=source,
             confidence=confidence,
+            evidence=evidence or [],
+            user=user,
         )
 
     def write_hypothesis(
