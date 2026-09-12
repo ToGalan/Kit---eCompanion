@@ -9,3 +9,11 @@ dist/
 .DS_Store
 .env
 .env.local
+
+# Clause 6.7: no database, user store, or vault holding real user data is ever
+# committed. The directory itself is kept so a fresh clone has somewhere to write.
+data/*
+!data/.gitkeep
+
+# Cached third-party API responses. Volatile by nature and not source.
+.tool_cache/
