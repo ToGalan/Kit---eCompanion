@@ -69,5 +69,9 @@ changing PRINCIPLES.md first is a defect.
 ```bash
 python -m pytest -q
 npm test -- --run
-npm run dev -- --host 0.0.0.0
+npm run dev                  # backend on 8002 and frontend on 5175, together
 ```
+
+`npm run dev` needs Python 3.12+ and starts both halves; `dev:api` and `dev:web` run
+them separately. Ports live in `KIT_API_PORT` / `KIT_WEB_PORT`, read by both
+`vite.config.ts` and `scripts/dev.mjs` — do not hardcode a port in one of them.

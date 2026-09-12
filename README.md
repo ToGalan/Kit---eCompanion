@@ -28,9 +28,32 @@ Planned signal sources include richer metadata and review APIs for games, film, 
 ## Local development
 
 ```bash
+npm install
+pip install -e . uvicorn     # Python 3.12 or newer
+npm run dev                  # starts the backend and the frontend together
+```
+
+`npm run dev` runs both halves: the FastAPI backend on 8002 and Vite on 5175, with
+their output interleaved and prefixed. Ctrl-C stops both, and if either half exits the
+other is stopped too — a frontend running against an absent backend answers every
+`/api` call with an error, which reads as a broken API rather than a missing one.
+
+Both ports come from `KIT_WEB_PORT` and `KIT_API_PORT`, which `vite.config.ts` and the
+dev script share, so the proxy and the server it points at cannot drift apart:
+
+```bash
+KIT_API_PORT=9002 npm run dev          # move both halves' agreement in one place
+KIT_PYTHON=/usr/bin/python3.12 npm run dev
+npm run dev -- --host 0.0.0.0          # extra arguments are passed to Vite
+npm run dev:api                        # or run the halves separately
+npm run dev:web
+```
+
+Tests:
+
+```bash
 python -m pytest -q
 npm test -- --run
-npm run dev -- --host 0.0.0.0
 ```
 
 ## Memory
