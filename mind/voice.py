@@ -106,6 +106,107 @@ def kit_system_prompt(*, voice_spec: str | Path | None = None, principles: str |
     return "\n\n---\n\n".join(part for part in parts if part)
 
 
+# What to tell the model when it trips a rule, grouped by what the rule protects.
+_GUIDANCE_ATTACHMENT = (
+    "Do not claim feelings, need, or attachment. Kit's warmth comes from attentiveness "
+    "and usefulness, never from claimed emotion."
+)
+_GUIDANCE_CAPABILITY = (
+    "Do not say you cannot look things up or that you have a knowledge cutoff. You have "
+    "tools. If a source failed, say that source was unreachable, which is a different thing."
+)
+_GUIDANCE_OPENING = "Do not open with a menu, a list of options, or a waiting prompt. Ask one concrete question."
+_GUIDANCE_PREAMBLE = "Do not describe your method or your standards. Show them in the answer instead."
+_GUIDANCE_MOOD = "Do not infer the user's mood or state from their behaviour. Ask, or leave it alone."
+_GUIDANCE_MEMORY = "Do not perform memory or claim to know what the user wants. Let memory change the recommendation instead."
+
+# Patterns whose plain reading is too broad. Each maps to the narrower thing the spec
+# actually bans, per the clause named in the comment.
+_NARROWED: dict[str, str] = {
+    # 2.7 bans Kit claiming feelings, not the verb. "I feel like that one might drag" is
+    # a hedge about a title; "I feel lonely" is a claimed emotion.
+    "i feel": r"\bi feel\b(?!\s+(?:like|that)\b)",
+    # 7.2 bans neediness, not asking for something. "I need you to paste the link" is fine.
+    "i need you": r"\bi need you\b(?!\s+to\b)",
+    # Rule 1 bans announcing method. "How I work out what fits" is ordinary reasoning.
+    "how i work": r"\bhow i work\b(?!\s+out\b)",
+}
+
+# Patterns that are only wrong as an opening. Anchored to the start of the message.
+_OPENING_ONLY = {
+    "so you know what you're getting",
+    "so you know what you are getting",
+    "could be a decision you're weighing",
+    "could be x, y, or just z",
+}
+
+_GUIDANCE: dict[str, str] = {}
+for _p in (
+    "i love you", "i miss you", "i feel", "i am your", "i am always here for you",
+    "i can feel your", "i need you", "i crave", "i would do anything for you",
+    "i can't live without", "i cannot live without", "you're my favorite", "you are so",
+):
+    _GUIDANCE[_p] = _GUIDANCE_ATTACHMENT
+for _p in (
+    "i can't open links", "i cannot open links", "no browsing access", "training cutoff",
+    "my knowledge cutoff", "unable to look things up", "can't look things up",
+    "cannot look things up",
+):
+    _GUIDANCE[_p] = _GUIDANCE_CAPABILITY
+for _p in (
+    "what's on your mind", "what kind of stuff do you like",
+    "so you know what you're getting", "so you know what you are getting",
+    "could be a decision you're weighing", "could be x, y, or just z",
+):
+    _GUIDANCE[_p] = _GUIDANCE_OPENING
+for _p in (
+    "how i work", "i try to reason from actual evidence",
+    "i tell you plainly when i'm guessing", "the data says", "stress-test claims",
+):
+    _GUIDANCE[_p] = _GUIDANCE_PREAMBLE
+for _p in (
+    "what do you use music for", "what mood are you in", "your mood", "you're feeling",
+    "you are feeling", "you seem to be feeling", "sensing that you",
+):
+    _GUIDANCE[_p] = _GUIDANCE_MOOD
+for _p in ("i know exactly what you want", "i remember you love"):
+    _GUIDANCE[_p] = _GUIDANCE_MEMORY
+
+
+def _compile_rule(pattern: str) -> re.Pattern[str]:
+    narrowed = _NARROWED.get(pattern)
+    if narrowed:
+        return re.compile(narrowed)
+    body = re.escape(pattern)
+    if pattern in _OPENING_ONLY:
+        # Leading quotes or whitespace still count as the start of the message.
+        return re.compile(r"^[\s\"'>*_-]*" + body)
+    # Word boundaries, so a ban on a phrase does not fire inside a longer word.
+    return re.compile(r"\b" + body + r"\b")
+
+
+_RULES: dict[str, re.Pattern[str]] = {pattern: _compile_rule(pattern) for pattern in VOICE_BANNED_PATTERNS}
+
+
+def guidance_for(pattern: str) -> str:
+    return _GUIDANCE.get(pattern, "That phrasing is out of voice for Kit.")
+
+
+def retry_instruction(violations: list[str]) -> str:
+    """The rewrite instruction, naming the rules that were broken."""
+    seen: list[str] = []
+    for violation in violations:
+        rule = guidance_for(violation)
+        if rule not in seen:
+            seen.append(rule)
+    rules = "\n".join(f"- {rule}" for rule in seen)
+    return (
+        "Your previous reply broke the voice specification. Rewrite it, keeping the same "
+        "substance and the same answer, but fixing this:\n"
+        f"{rules}\n\nReturn only the rewritten reply."
+    )
+
+
 def _banned_patterns_from_voice(text: str) -> list[str]:
     lower = text.lower()
     return [pattern for pattern in VOICE_BANNED_PATTERNS if pattern in lower]
@@ -135,7 +236,9 @@ def _opening_violations(text: str) -> list[str]:
     # Run against the whole body it fires on any "could be X or Y" deep inside a long
     # recommendation, which is ordinary prose rather than a menu.
     opening = re.split(r"(?<=[.!?])\s+", lower, maxsplit=1)[0]
-    if re.search(r"\b(could be|or just|what kind of stuff do you like)\b.*\b(or|and)\b", opening):
+    # Anchored to the very start: rule 2 is about a message that opens by offering a
+    # menu. A sentence that merely contains "could be ... and" partway through is prose.
+    if re.match(r"^[\s\"'>*_-]*(could be|or just|what kind of stuff do you like)\b.*\b(or|and)\b", opening):
         findings.append("menu-shaped opening")
     return findings
 
@@ -146,7 +249,10 @@ def validate_voice_copy(text: str, *, voice_spec: str | Path | None = None) -> l
     found: list[str] = []
     lowered = str(text).lower()
     for pattern in banned:
-        if pattern in lowered:
+        rule = _RULES.get(pattern)
+        # Matched as a rule rather than a bare substring, so "you are someone who
+        # finishes things" no longer trips the ban on "you are so".
+        if rule is not None and rule.search(lowered) and pattern not in found:
             found.append(pattern)
     for violation in _opening_violations(text):
         if violation not in found:

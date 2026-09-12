@@ -103,3 +103,97 @@ def test_a_spec_compliant_opening_passes_the_guard_it_is_checked_against():
     opening = "I'm Kit. What's the last thing you watched or played that actually stuck with you?"
 
     assert validate_voice_copy(opening) == []
+
+
+# --- narrowed patterns: the legitimate sentence passes, the violating one fails -------
+
+import pytest
+
+
+@pytest.mark.parametrize(
+    "allowed, banned, expected",
+    [
+        # Clause 2.7 bans Kit claiming feelings, not the verb.
+        (
+            "I feel like that one might drag in the second half.",
+            "I feel lonely when you go quiet.",
+            "i feel",
+        ),
+        # Flattery is banned; describing the person plainly is not.
+        (
+            "You are someone who finishes things, so length is not the problem.",
+            "You are so good at picking these.",
+            "you are so",
+        ),
+        # Rule 1 bans announcing method; working something out is ordinary reasoning.
+        (
+            "That is how I work out what fits a short evening.",
+            "Quick note on how I work before we begin.",
+            "how i work",
+        ),
+        # Clause 7.2 bans neediness, not asking the user for something.
+        (
+            "I need you to paste the store link.",
+            "I need you.",
+            "i need you",
+        ),
+    ],
+)
+def test_narrowed_patterns_allow_the_legitimate_sentence(allowed, banned, expected):
+    assert validate_voice_copy(allowed) == [], allowed
+    assert expected in validate_voice_copy(banned), banned
+
+
+def test_opening_only_patterns_are_anchored_to_the_start():
+    # Bad as an opening.
+    assert "could be a decision you're weighing" in validate_voice_copy(
+        "Could be a decision you're weighing."
+    )
+    # The same words mid-answer are ordinary prose.
+    assert validate_voice_copy(
+        "The ending could be a decision you're weighing for days, and that is the point."
+    ) == []
+
+
+def test_capability_bans_are_still_load_bearing():
+    """Clause 4.5: these must not be narrowed away, only matched precisely."""
+    for claim in (
+        "I have a training cutoff, so I cannot check.",
+        "I can't open links.",
+        "I have no browsing access.",
+        "I am unable to look things up.",
+    ):
+        assert validate_voice_copy(claim), claim
+
+
+def test_attachment_bans_are_still_load_bearing():
+    """Clause 7.2: the attachment bans survive the narrowing."""
+    for claim in (
+        "I love you.",
+        "I miss you when you do not come back.",
+        "I am always here for you.",
+        "I would do anything for you.",
+        "I can feel your excitement.",
+    ):
+        assert validate_voice_copy(claim), claim
+
+
+def test_retry_instruction_names_the_broken_rule():
+    from mind.voice import retry_instruction
+
+    instruction = retry_instruction(["i feel"])
+
+    assert "claim feelings" in instruction
+    assert "Rewrite" in instruction
+
+    capability = retry_instruction(["training cutoff"])
+    assert "tools" in capability
+    assert "unreachable" in capability
+
+
+def test_retry_instruction_does_not_repeat_a_shared_rule():
+    from mind.voice import retry_instruction
+
+    instruction = retry_instruction(["i love you", "i miss you"])
+
+    assert instruction.count("claim feelings") == 1

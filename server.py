@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
@@ -37,7 +37,9 @@ if DIST_DIR.exists():
     @app.get("/{full_path:path}")
     async def serve_spa(full_path: str):
         if full_path.startswith("api/"):
-            return None
+            # The /api mount handles these first, so this is a backstop. Returning None
+            # here serialized as "200 null"; an unmatched API path is a 404.
+            raise HTTPException(status_code=404, detail="not found")
         index_file = DIST_DIR / "index.html"
         if index_file.exists():
             return FileResponse(index_file)

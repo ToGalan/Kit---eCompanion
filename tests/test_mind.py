@@ -242,3 +242,218 @@ def test_run_turn_without_a_brain_still_reports_an_honest_empty(monkeypatch):
 
     assert result["vault_evidence"] == []
     assert "offline" in result["answer"].lower()
+
+
+# --- agentic tool loop ---------------------------------------------------------------
+
+def _text_block(text):
+    return Mock(type="text", text=text)
+
+
+def _tool_use_block(block_id, name, payload):
+    # Mock(name=...) sets the mock's own repr name, so .name has to be assigned after.
+    block = Mock(type="tool_use", id=block_id, input=payload)
+    block.name = name
+    return block
+
+
+def _response(*blocks, stop_reason="end_turn"):
+    return Mock(content=list(blocks), stop_reason=stop_reason)
+
+
+class _RecordingTool:
+    name = "steam_catalog"
+    description = "Look up Steam store metadata."
+    input_schema = {"type": "object", "properties": {"query": {"type": "string"}}}
+
+    def __init__(self, result=None, raises=None):
+        self._result = result
+        self._raises = raises
+        self.calls = []
+
+    def run(self, **kwargs):
+        self.calls.append(kwargs)
+        if self._raises is not None:
+            raise self._raises
+        return self._result
+
+
+def _client_returning(monkeypatch, *responses):
+    client = Mock()
+    client.messages.create.side_effect = list(responses)
+    monkeypatch.setattr("mind.ai.Anthropic", lambda **kwargs: client)
+    return client
+
+
+def test_converse_runs_a_single_tool_round_trip(monkeypatch):
+    tool = _RecordingTool(
+        result={
+            "ok": True,
+            "source": "steam_catalog",
+            "fetched_at": "2026-09-11T10:00:00+00:00",
+            "data": {"title": "Hades"},
+        }
+    )
+    client = _client_returning(
+        monkeypatch,
+        _response(_tool_use_block("tu_1", "steam_catalog", {"query": "Hades"}), stop_reason="tool_use"),
+        _response(_text_block("Hades is on Steam.")),
+    )
+    gateway = Opus5Gateway(api_key="test-key")
+
+    result = gateway.converse("Is Hades on Steam?", tools={"steam_catalog": tool})
+
+    assert tool.calls == [{"query": "Hades"}]
+    assert result.text == "Hades is on Steam."
+    assert result.iterations == 2
+    assert result.stopped_at_cap is False
+
+    # The schemas actually reached the API, which is the whole point.
+    first_call = client.messages.create.call_args_list[0].kwargs
+    assert first_call["tools"][0]["name"] == "steam_catalog"
+
+    # And the tool result went back as a tool_result block tied to the call id.
+    second_call = client.messages.create.call_args_list[1].kwargs
+    blocks = second_call["messages"][-1]["content"]
+    assert blocks[0]["type"] == "tool_result"
+    assert blocks[0]["tool_use_id"] == "tu_1"
+    assert blocks[0]["is_error"] is False
+
+
+def test_converse_carries_source_and_timestamp_through_to_the_caller(monkeypatch):
+    tool = _RecordingTool(result={"ok": True, "data": {"title": "Hades"}})
+    _client_returning(
+        monkeypatch,
+        _response(_tool_use_block("tu_1", "steam_catalog", {"query": "Hades"}), stop_reason="tool_use"),
+        _response(_text_block("done")),
+    )
+
+    result = Opus5Gateway(api_key="test-key").converse("q", tools={"steam_catalog": tool})
+
+    # Clause 4.2: provenance survives the loop even when the tool omitted it.
+    assert len(result.tool_results) == 1
+    record = result.tool_results[0]
+    assert record["source"] == "steam_catalog"
+    assert record["fetched_at"]
+    assert result.reached_any_source is True
+
+
+def test_converse_handles_two_rounds_of_tool_use(monkeypatch):
+    tool = _RecordingTool(result={"ok": True, "source": "steam_catalog", "fetched_at": "t", "data": {}})
+    _client_returning(
+        monkeypatch,
+        _response(_tool_use_block("tu_1", "steam_catalog", {"query": "Hades"}), stop_reason="tool_use"),
+        _response(_tool_use_block("tu_2", "steam_catalog", {"query": "Hades II"}), stop_reason="tool_use"),
+        _response(_text_block("Both exist.")),
+    )
+
+    result = Opus5Gateway(api_key="test-key").converse("compare them", tools={"steam_catalog": tool})
+
+    assert [call["query"] for call in tool.calls] == ["Hades", "Hades II"]
+    assert result.iterations == 3
+    assert len(result.tool_results) == 2
+    assert result.text == "Both exist."
+    assert result.stopped_at_cap is False
+
+
+def test_converse_stops_at_the_iteration_cap(monkeypatch):
+    tool = _RecordingTool(result={"ok": True, "source": "steam_catalog", "fetched_at": "t", "data": {}})
+    # The model never stops asking.
+    client = _client_returning(
+        monkeypatch,
+        *[
+            _response(_tool_use_block(f"tu_{i}", "steam_catalog", {"query": str(i)}), stop_reason="tool_use")
+            for i in range(10)
+        ],
+    )
+
+    result = Opus5Gateway(api_key="test-key").converse(
+        "loop", tools={"steam_catalog": tool}, max_iterations=3
+    )
+
+    assert result.stopped_at_cap is True
+    assert result.iterations == 3
+    assert client.messages.create.call_count == 3
+    assert len(tool.calls) == 3
+
+
+def test_a_raising_tool_returns_an_error_result_instead_of_failing_the_turn(monkeypatch):
+    tool = _RecordingTool(raises=RuntimeError("steam is unreachable"))
+    _client_returning(
+        monkeypatch,
+        _response(_tool_use_block("tu_1", "steam_catalog", {"query": "Hades"}), stop_reason="tool_use"),
+        _response(_text_block("I could not reach Steam just now.")),
+    )
+
+    result = Opus5Gateway(api_key="test-key").converse("q", tools={"steam_catalog": tool})
+
+    # Clause 4.7: the domain drops out, the turn survives.
+    assert result.text == "I could not reach Steam just now."
+    record = result.tool_results[0]
+    assert record["ok"] is False
+    assert "steam is unreachable" in record["error"]
+    assert record["source"] == "steam_catalog"
+    assert record["fetched_at"]
+    assert result.reached_any_source is False
+
+
+def test_an_unknown_tool_name_is_reported_not_raised(monkeypatch):
+    _client_returning(
+        monkeypatch,
+        _response(_tool_use_block("tu_1", "nonexistent", {}), stop_reason="tool_use"),
+        _response(_text_block("no such source")),
+    )
+
+    result = Opus5Gateway(api_key="test-key").converse("q", tools={"steam_catalog": _RecordingTool()})
+
+    assert result.tool_results[0]["ok"] is False
+    assert "unknown tool" in result.tool_results[0]["error"]
+
+
+def test_mixed_content_does_not_break_text_extraction(monkeypatch):
+    """A response carrying thinking and tool_use alongside text must still yield the text."""
+    thinking = Mock(type="thinking", thinking="considering", signature="sig")
+    _client_returning(
+        monkeypatch,
+        _response(
+            thinking,
+            _text_block("Checking Steam."),
+            _tool_use_block("tu_1", "steam_catalog", {"query": "Hades"}),
+            stop_reason="tool_use",
+        ),
+        _response(_text_block("Hades is on Steam.")),
+    )
+    tool = _RecordingTool(result={"ok": True, "source": "steam_catalog", "fetched_at": "t", "data": {}})
+
+    result = Opus5Gateway(api_key="test-key").converse("q", tools={"steam_catalog": tool})
+
+    assert result.text == "Hades is on Steam."
+    # The thinking block is echoed back rather than dropped.
+    assistant = [m for m in result.messages if m["role"] == "assistant"][0]
+    kinds = [block["type"] for block in assistant["content"]]
+    assert kinds == ["thinking", "text", "tool_use"]
+
+
+def test_converse_without_tools_sends_no_tools_key(monkeypatch):
+    client = _client_returning(monkeypatch, _response(_text_block("plain answer")))
+
+    result = Opus5Gateway(api_key="test-key").converse("hello")
+
+    assert result.text == "plain answer"
+    assert result.tool_results == []
+    assert "tools" not in client.messages.create.call_args.kwargs
+
+
+def test_generate_and_generate_structured_still_send_no_tools(monkeypatch):
+    """Single-shot callers must be unaffected by the tool support."""
+    client = _client_returning(
+        monkeypatch,
+        _response(_text_block("single shot")),
+        _response(_text_block('{"ok": true}')),
+    )
+    gateway = Opus5Gateway(api_key="test-key")
+
+    assert gateway.generate("hi") == "single shot"
+    assert gateway.generate_structured("hi", {"type": "object"}) == {"ok": True}
+    for call in client.messages.create.call_args_list:
+        assert "tools" not in call.kwargs

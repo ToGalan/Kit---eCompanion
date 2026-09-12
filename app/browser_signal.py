@@ -9,6 +9,7 @@ import sqlite3
 from collections import defaultdict
 from datetime import datetime, timedelta
 from pathlib import Path
+from threading import Lock
 from typing import Annotated, Any
 from zoneinfo import ZoneInfo
 
@@ -19,15 +20,25 @@ from pydantic import BaseModel
 
 from app.touchpoint import Touchpoint, TouchpointStore
 from kit.vault import Vault
-from mind.ai import Opus5Gateway
+from mind.ai import ConfigurationError, Opus5Gateway
+from mind.conversation import ConversationState, TurnDecision, decide_turn
 from mind.obsidian_brain import ObsidianBrain
-from mind.voice import kit_system_prompt, validate_voice_copy
+from mind.voice import kit_system_prompt, retry_instruction, validate_voice_copy
+
+try:  # The SDK is optional at import time, exactly as mind.ai treats it.
+    from anthropic import APIError as _AnthropicAPIError  # type: ignore
+except Exception:  # pragma: no cover - SDK not installed
+    _AnthropicAPIError = ()  # type: ignore
 
 logger = logging.getLogger(__name__)
 
 CHAT_UNAVAILABLE = (
     "The live AI is unavailable right now. Configure ANTHROPIC_API_KEY or check the backend model connection."
 )
+
+# Shown when a reply cannot be brought into voice. It says nothing about the guard;
+# the user does not need to know the machinery, only that this one did not land.
+VOICE_FALLBACK = "Let me come at that differently. What are you actually after tonight?"
 
 MEDIA_DOMAINS = {
     "youtube.com",
@@ -306,6 +317,9 @@ class BrowserSignalStore:
         with self._connect() as conn:
             conn.execute("DELETE FROM browser_events WHERE user = ?", (user,))
             conn.execute("DELETE FROM users WHERE user = ?", (user,))
+        # Clause 6.5: deleting an account removes the conversation state as well, not
+        # only the signal store.
+        forget_conversation(user)
 
     def current_occasion(self, user: str, *, now: datetime | None = None) -> Any:
         from mind.context import current_occasion
@@ -326,6 +340,79 @@ vault = Vault(Path("vault"))
 # One Vault instance, shared. Two would mean two git repos racing on the same directory.
 brain = ObsidianBrain(vault=vault)
 touchpoint_store = TouchpointStore()
+
+# One gateway for the process. Building an Anthropic client per message discards its
+# connection pool every turn. Construction is lazy, so this does not need a key at import.
+gateway = Opus5Gateway()
+
+
+def get_gateway() -> Opus5Gateway:
+    """Dependency seam, so a test can substitute a gateway without patching the module."""
+    return gateway
+
+
+# Conversation state per user, held across requests. decide_turn mutates the state it is
+# given, so handing it the same object each turn is what lets a conversation accumulate.
+# This lives in memory: it survives requests, not a restart.
+_conversation_states: dict[str, ConversationState] = {}
+_conversation_lock = Lock()
+
+
+def conversation_state_for(user: str) -> ConversationState:
+    with _conversation_lock:
+        state = _conversation_states.get(user)
+        if state is None:
+            state = ConversationState(user=user)
+            _conversation_states[user] = state
+        return state
+
+
+def forget_conversation(user: str) -> None:
+    """Drop a user's conversation state. Deleting an account has to take this too."""
+    with _conversation_lock:
+        _conversation_states.pop(user, None)
+
+
+def _current_occasion_payload(user: str) -> dict[str, Any] | None:
+    """The occasion, or None when it is genuinely unknown.
+
+    Clause 5.2 forbids inventing one, so a user with no timezone on record gets None
+    rather than a plausible-looking weekday evening.
+    """
+    try:
+        inference = store.current_occasion(user)
+    except Exception:
+        return None
+    occasion = getattr(inference, "occasion", None)
+    return occasion.as_dict() if occasion is not None else None
+
+
+def run_conversation_turn(
+    user: str,
+    message: str,
+    *,
+    goal: str | None = None,
+    turn_gateway: Opus5Gateway | None = None,
+) -> TurnDecision:
+    """One turn through the single conversation engine.
+
+    Every conversational endpoint goes through here. A touchpoint differs from a chat
+    message by the goal carried on the turn, not by having its own implementation.
+    """
+    state = conversation_state_for(user)
+    if goal:
+        state.current_goal = goal
+    occasion = _current_occasion_payload(user)
+    persona_snapshot = vault.persona_snapshot()
+    return decide_turn(
+        message,
+        user=user,
+        state=state,
+        persona_snapshot=persona_snapshot,
+        occasion=occasion,
+        vault=vault,
+        gateway=turn_gateway or gateway,
+    )
 
 
 def _parse_frontmatter(content: str) -> dict[str, str]:
@@ -663,39 +750,77 @@ def export_vault() -> FileResponse:
     return FileResponse(path=str(archive), media_type="application/zip", filename=archive.name)
 
 
+def _rewrite_in_voice(message: str, violations: list[str], turn_gateway: Opus5Gateway) -> str:
+    """One rewrite attempt, naming the rule that was broken.
+
+    A stochastic model producing one bad sample should not cost the user their turn.
+    """
+    try:
+        rewritten = turn_gateway.generate(
+            f"{retry_instruction(violations)}\n\nPrevious reply:\n{message}",
+            system=kit_system_prompt(),
+        )
+    except Exception:
+        logger.warning("voice rewrite attempt failed", exc_info=True)
+        return ""
+    return (rewritten or "").strip()
+
+
+def _turn_response(decision: TurnDecision, user: str, turn_gateway: Opus5Gateway) -> dict[str, Any]:
+    """Shape a turn for the client, with the intent so an OFFER can render unlike an ACKNOWLEDGE."""
+    message = (decision.message or "").strip()
+    if not message:
+        logger.warning("turn produced no message for user %s (intent %s)", user, decision.intent)
+        return {"ok": False, "intent": decision.intent, "message": CHAT_UNAVAILABLE}
+
+    # VOICE.md governs user-facing copy, whoever wrote it.
+    violations = validate_voice_copy(message)
+    if violations:
+        logger.warning("turn violated the voice spec for user %s: %s (retrying)", user, violations)
+        rewritten = _rewrite_in_voice(message, violations, turn_gateway)
+        second = validate_voice_copy(rewritten) if rewritten else ["empty rewrite"]
+        if rewritten and not second:
+            message = rewritten
+        else:
+            # Two strikes. The user is told nothing about the guard; that is internal.
+            logger.warning("voice rewrite still out of voice for user %s: %s", user, second)
+            return {"ok": False, "intent": decision.intent, "message": VOICE_FALLBACK}
+
+    return {"ok": True, "intent": decision.intent, "message": message, "state": decision.state}
+
+
+def _take_turn(user: str, message: str, *, goal: str | None = None, turn_gateway: Opus5Gateway | None = None) -> dict[str, Any]:
+    """Run a turn and translate failures into HTTP outcomes.
+
+    A missing API key is a deployment fault and must not look like a busy upstream, so
+    ConfigurationError becomes a 500 with its own log line. Only transport and API
+    errors become the user-facing unavailable message.
+    """
+    try:
+        decision = run_conversation_turn(user, message, goal=goal, turn_gateway=turn_gateway)
+    except ConfigurationError:
+        logger.error("conversation turn is misconfigured for user %s", user, exc_info=True)
+        raise HTTPException(status_code=500, detail="the model backend is not configured") from None
+    except _AnthropicAPIError:
+        logger.warning("model backend unavailable for user %s", user, exc_info=True)
+        return {"ok": False, "intent": "ACKNOWLEDGE", "message": CHAT_UNAVAILABLE}
+    except (ConnectionError, TimeoutError, OSError):
+        logger.warning("transport failure reaching the model for user %s", user, exc_info=True)
+        return {"ok": False, "intent": "ACKNOWLEDGE", "message": CHAT_UNAVAILABLE}
+
+    return _turn_response(decision, user, turn_gateway or gateway)
+
+
 @app.post("/chat")
-def chat(payload: dict[str, Any], user: str = Depends(get_authenticated_user)) -> dict[str, Any]:
+def chat(
+    payload: dict[str, Any],
+    user: str = Depends(get_authenticated_user),
+    turn_gateway: Opus5Gateway = Depends(get_gateway),
+) -> dict[str, Any]:
     message = str(payload.get("message") or "").strip()
     if not message:
         raise HTTPException(status_code=400, detail="message is required")
-
-    try:
-        # The voice spec is given to the model, not only enforced afterwards. Without it
-        # the model opens with the menus and capability lists VOICE.md rules 1-4 ban, and
-        # the guard then discards a perfectly reasonable answer.
-        answer = Opus5Gateway().generate(message, system=kit_system_prompt())
-    except Exception:
-        # The exception text can carry backend detail and configuration; it belongs in the
-        # server log, not in the response body.
-        logger.warning("chat generation failed for user %s", user, exc_info=True)
-        return {"ok": False, "message": CHAT_UNAVAILABLE}
-
-    answer = answer.strip()
-    if not answer:
-        logger.warning("chat generation returned empty content for user %s", user)
-        return {"ok": False, "message": CHAT_UNAVAILABLE}
-
-    # VOICE.md governs user-facing copy, and model output is user-facing copy.
-    violations = validate_voice_copy(answer)
-    if violations:
-        logger.warning("chat response violated the voice spec for user %s: %s", user, violations)
-        return {
-            "ok": False,
-            "message": "That answer came back out of voice, so I am not going to send it. Ask me again and I will try a different route.",
-            "voice_violations": violations,
-        }
-
-    return {"ok": True, "message": answer}
+    return _take_turn(user, message, turn_gateway=turn_gateway)
 
 
 @app.get("/health")
@@ -795,13 +920,29 @@ def start_touchpoint(
     )
     if touchpoint is None:
         return {"status": "rate_limited", "opening": None, "session_id": None}
-    return {"status": "ok", "opening": touchpoint.opening, "session_id": touchpoint.session_id, "goal": touchpoint.goal}
+
+    # A touchpoint is Kit opening rather than a user turn, so the engine is not asked to
+    # decide anything here. The opening is still recorded on the shared conversation
+    # state, so the reply that follows lands in the same conversation rather than a
+    # second one, and the goal rides along as a parameter of the turn.
+    state = conversation_state_for(user)
+    state.current_goal = touchpoint.goal
+    state.remember_asked(touchpoint.opening)
+    state.remember_turn("ASK", user=user, text=touchpoint.opening)
+    return {
+        "status": "ok",
+        "intent": "ASK",
+        "opening": touchpoint.opening,
+        "session_id": touchpoint.session_id,
+        "goal": touchpoint.goal,
+    }
 
 
 @app.post("/touchpoint/respond")
 def record_touchpoint_response(
     payload: dict[str, Any],
     user: str = Depends(get_authenticated_user),
+    turn_gateway: Opus5Gateway = Depends(get_gateway),
 ):
     message = str(payload.get("message", "")).strip()
     session_id = str(payload.get("session_id", "")).strip() or None
@@ -818,7 +959,16 @@ def record_touchpoint_response(
         store=touchpoint_store,
     )
     written = touchpoint.capture_durable_fact(message, session_id=session_id or touchpoint.session_id)
-    return {"status": "stored" if written is not None else "not_durable", "session_id": touchpoint.session_id}
+
+    # The reply itself is a normal user turn, so it goes through the one engine. What
+    # makes it a touchpoint is the goal carried on the turn, not a second code path.
+    turn = _take_turn(user, message, goal=touchpoint.goal, turn_gateway=turn_gateway)
+    return {
+        "status": "stored" if written is not None else "not_durable",
+        "session_id": touchpoint.session_id,
+        "goal": touchpoint.goal,
+        **turn,
+    }
 
 
 @app.post("/vault/claim")
