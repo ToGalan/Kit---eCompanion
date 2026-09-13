@@ -1,0 +1,12 @@
+{
+  "args": {
+    "app_id": null,
+    "query": "What is Disco Elysium about"
+  },
+  "data": {},
+  "error": "STEAM_API_KEY is not configured; Steam lookups are disabled.",
+  "fetched_at": "2026-09-12T01:11:37.813265+00:00",
+  "ok": false,
+  "source": "steam_catalog",
+  "tool": "steam_catalog"
+}

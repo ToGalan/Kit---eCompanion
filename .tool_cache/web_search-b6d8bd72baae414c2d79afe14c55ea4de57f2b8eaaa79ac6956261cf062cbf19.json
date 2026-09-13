@@ -1,0 +1,11 @@
+{
+  "args": {
+    "query": "Hades Supergiant Steam app id store page"
+  },
+  "data": {},
+  "error": "No search API key is configured; web_search is disabled.",
+  "fetched_at": "2026-09-12T01:58:06.729343+00:00",
+  "ok": false,
+  "source": "web_search",
+  "tool": "web_search"
+}

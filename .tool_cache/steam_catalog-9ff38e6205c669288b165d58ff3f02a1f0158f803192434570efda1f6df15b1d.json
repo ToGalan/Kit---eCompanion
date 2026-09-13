@@ -1,0 +1,12 @@
+{
+  "args": {
+    "app_id": null,
+    "query": "Hades"
+  },
+  "data": {},
+  "error": "STEAM_API_KEY is not configured; Steam lookups are disabled.",
+  "fetched_at": "2026-09-12T01:58:04.584937+00:00",
+  "ok": false,
+  "source": "steam_catalog",
+  "tool": "steam_catalog"
+}
