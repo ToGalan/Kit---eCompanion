@@ -37,10 +37,14 @@ function fail(message, ...detail) {
   // Anything already started has to come down with us, or a failed launch leaves an
   // orphaned backend holding its port and the next attempt fails for a new reason.
   // SIGTERM rather than SIGKILL: uvicorn --reload runs a worker child, and only the
-  // parent's own handler takes that worker down with it.
+  // parent's own handler takes that worker down with it. The signal is delivered by
+  // the kernel when kill() returns, so exiting immediately afterwards does not cancel
+  // it -- and exiting immediately is the point. Deferring the exit let this function
+  // return, and the caller carried on and started the very processes it had just
+  // reported it could not start.
   shuttingDown = true;
   for (const child of children.values()) child.kill('SIGTERM');
-  setTimeout(() => process.exit(1), 500).unref();
+  process.exit(1);
 }
 
 /** Interpreters worth trying, best first: an explicit choice, then the project venv. */
