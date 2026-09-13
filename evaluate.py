@@ -188,7 +188,10 @@ def evaluate_matching(
                 signals = signals[:n_signals]
             persona_snapshot = _persona_from_signals(signals)
 
-            ranked = match(persona_snapshot, catalog, k=k)
+            # Synthetic catalogue entries carry no provenance and reach no user, so the
+            # verification gate is off here. This measures ranking quality (1.2), not
+            # sourcing; a fixture failing 4.5 would otherwise score every arm at zero.
+            ranked = match(persona_snapshot, catalog, k=k, require_verification=False)
             persona_hit = _score_hit_at_k(ranked, engaged_titles, k=k)
             persona_scores.append(persona_hit)
 

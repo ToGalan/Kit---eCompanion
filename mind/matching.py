@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any, Iterable
+
+from mind.freshness import availability_ok, verify_candidate
 
 # Popular titles naturally receive outsized attention; this penalty counteracts measured
 # attention concentration so a long-tail title can still outrank a blockbuster when the
@@ -175,6 +178,23 @@ def _persona_signals(persona_snapshot: dict[str, Any]) -> list[dict[str, str]]:
     return evidence
 
 
+def _combine_overlaps(overlaps: list[float]) -> float:
+    """Combine per-signal overlaps into a fit score in [0, 1].
+
+    Summing them made the score unbounded, and an unbounded base is what made the
+    popularity penalty meaningless: on a persona with several facts the sum passed 1.0
+    on its own, every candidate clamped to the ceiling, and subtracting 0.35 changed
+    nothing. Combined as a noisy-OR, more corroborating signals still raise the score --
+    that is real evidence -- but they approach 1.0 rather than running past it, so the
+    penalty stays material at every persona size.
+    """
+    combined = 0.0
+    for overlap in overlaps:
+        bounded = max(0.0, min(1.0, overlap))
+        combined = combined + bounded - (combined * bounded)
+    return combined
+
+
 def _score_candidate(persona_signals: list[dict[str, str]], candidate: dict[str, Any]) -> tuple[str, float, list[str]]:
     candidate_functions = _candidate_functions(candidate)
     best_function = candidate_functions[0]
@@ -182,7 +202,7 @@ def _score_candidate(persona_signals: list[dict[str, str]], candidate: dict[str,
     evidence: list[str] = []
 
     for function_name in candidate_functions:
-        function_score = 0.0
+        overlaps: list[float] = []
         matched_evidence: list[str] = []
         for signal in persona_signals:
             signal_text = f"{signal.get('title', '')} {signal.get('content', '')}".strip()
@@ -190,8 +210,9 @@ def _score_candidate(persona_signals: list[dict[str, str]], candidate: dict[str,
                 continue
             score = _token_overlap(signal_text, function_name)
             if score > 0.0:
-                function_score += score
+                overlaps.append(score)
                 matched_evidence.append(signal_text)
+        function_score = _combine_overlaps(overlaps)
         if function_score > best_score:
             best_score = function_score
             best_function = function_name
@@ -210,11 +231,26 @@ def _as_float(value: Any, default: float = 0.0) -> float:
         return default
 
 
-def match(persona_snapshot: dict[str, Any], candidates: Iterable[dict[str, Any]] | None, k: int = 3) -> list[Match]:
+def match(
+    persona_snapshot: dict[str, Any],
+    candidates: Iterable[dict[str, Any]] | None,
+    k: int = 3,
+    *,
+    user_services: dict[str, Any] | None = None,
+    region: str | None = None,
+    require_verification: bool = True,
+    now: datetime | None = None,
+) -> list[Match]:
     """Return the strongest function-fit matches for a persona snapshot.
 
     The system reasons from what the persona uses media for and what a title supplies,
     not from audience co-viewing, tags, or a separate games-only matching pipeline.
+
+    Candidates are filtered before they are scored, never after (4.4): a title the
+    person cannot reach is not ranked and then caveated, it is gone. Verification (4.5)
+    is on by default, so a title no source confirms cannot be surfaced. Pass
+    require_verification=False only where nothing reaches a user -- the offline metric
+    harness scoring synthetic catalogues is the one such caller.
     """
     if candidates is None:
         return []
@@ -226,6 +262,15 @@ def match(persona_snapshot: dict[str, Any], candidates: Iterable[dict[str, Any]]
     ranked: list[Match] = []
     for candidate in candidates:
         if not isinstance(candidate, dict):
+            continue
+
+        # Availability first, and always: it only rejects a candidate that says it is
+        # out of region, off the person's services, delisted or unpurchasable.
+        if not availability_ok(candidate, user_services=user_services, region=region):
+            continue
+        if require_verification and not verify_candidate(
+            candidate, user_services=user_services, region=region, now=now
+        ):
             continue
 
         title = str(candidate.get("title") or candidate.get("name") or "").strip()
