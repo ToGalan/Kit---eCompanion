@@ -184,6 +184,8 @@ def record_statement(
     text: str,
     *,
     session_id: str,
+    reason: str | None = None,
+    source: str | None = None,
 ) -> dict[str, Any] | None:
     """File a durable statement as an elicited persona fact, or corroborate an existing one.
 
@@ -208,9 +210,9 @@ def record_statement(
     path = vault.write_persona_fact(
         title=title,
         content=statement,
-        reason=f"{user}: stated in chat",
+        reason=reason or f"{user}: stated in chat",
         layer="elicited",
-        source=f"chat:{session_id}",
+        source=source or f"chat:{session_id}",
         confidence=confidence,
         evidence=evidence,
         user=user,

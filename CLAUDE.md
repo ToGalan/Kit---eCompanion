@@ -19,12 +19,15 @@ changing PRINCIPLES.md first is a defect.
   writable. Do not add a default occasion to make a write succeed.
 - **Popularity penalty** (4.6). `mind/matching.py` subtracts a popularity term
   when computing confidence. Nothing downstream may add popularity back, in any
-  form, including recency, trending or engagement weighting. NOTE: the base score
-  it subtracts from is unbounded, so the penalty is currently swamped on any
-  persona with several facts. Fixing that is required, not optional.
-- **Availability before ranking** (4.4). `mind/freshness.py` defines
-  `availability_ok` and `verify_candidate`. NOTE: nothing calls either of them.
-  Clauses 4.4 and 4.5 are unenforced today. Wire them ahead of `match()`.
+  form, including recency, trending or engagement weighting. The fit score it
+  subtracts from is bounded to [0, 1] by `_combine_overlaps`, which is what keeps
+  the penalty material; summing the overlaps instead put every candidate on a rich
+  persona over the ceiling and made the penalty a no-op.
+- **Availability before ranking** (4.4, 4.5). `match()` calls `availability_ok`
+  and `verify_candidate` from `mind/freshness.py` before it scores anything, so an
+  unreachable or unverifiable title is gone rather than ranked and caveated.
+  `require_verification=False` exists for the offline metric harness, where
+  synthetic catalogues reach no user; do not pass it on a path that does.
 - **Confidence is computed** (5.10). No literal confidence values in application
   code.
 - **Creature never decays** (7.3). `src/creature/logic.ts` derives growth from
@@ -45,9 +48,10 @@ changing PRINCIPLES.md first is a defect.
   for a turn that looks useful.
 - **Confidence accumulates, it is not asserted** (5.10).
   `mind/memory.py:confidence_from_evidence` combines evidence as a noisy-OR and
-  never reaches certainty. NOTE: `app/touchpoint.py` and `mind/elicitation.py`
-  still write literal confidences (0.8, 0.85, 0.9, 0.6). Those are defects; route
-  them through the computed path rather than adding more.
+  never reaches certainty. Every writer routes through it: the touchpoint files
+  statements with `memory.record_statement`, and `mind/elicitation.py` derives its
+  values from the evidence count. `_HIGH_CONFIDENCE` there is a decision threshold,
+  not an asserted confidence.
 - **No sampling parameters on the gateway.** `mind/ai.py:SAMPLING_PARAMETERS` names
   what Opus 5 rejects with a 400. A `temperature` in the payload fails every
   request, and the chat route reports that failure to the user as "the live AI is

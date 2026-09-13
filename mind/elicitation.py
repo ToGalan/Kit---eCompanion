@@ -6,7 +6,10 @@ from pathlib import Path
 from typing import Any
 
 from kit.vault import Occasion, Vault
+from mind.memory import confidence_from_evidence
 
+# A threshold, not an asserted confidence: it decides when a hypothesis stops being
+# worth asking about. Values written to notes are computed from evidence instead.
 _HIGH_CONFIDENCE = 0.8
 
 
@@ -138,8 +141,24 @@ def _write_inferred_hypothesis(vault: Vault, hypothesis: dict[str, Any], user: s
         reason=f"{user}: inferred from behaviour",
         layer="inferred",
         source="kit inference",
-        confidence=float(hypothesis.get("confidence") or 0.6),
+        # Computed upstream where it exists; otherwise this is a single inference with
+        # one piece of evidence behind it, and it says so.
+        confidence=float(hypothesis.get("confidence") or confidence_from_evidence(1, layer="inferred")),
     )
+
+
+def _retire_inferred(inferred_path: Path, written: Path) -> bool:
+    """Delete the inferred note, unless the promotion overwrote it in place.
+
+    An inference filed as a persona note and its confirmed form share a title, so the
+    promotion is the same file with a new layer. Unlinking afterwards deleted the fact
+    that had just been confirmed: 5.7 says a confirmed inference is promoted, and it
+    was being promoted and then erased.
+    """
+    if inferred_path.resolve() == Path(written).resolve():
+        return False
+    inferred_path.unlink(missing_ok=True)
+    return True
 
 
 def confirm_inference(
@@ -170,10 +189,13 @@ def confirm_inference(
             reason=f"{user}: corrected inferred hypothesis",
             layer="elicited",
             source="user correction",
-            confidence=0.9,
+            # The correction is one statement from the person. 8.4 makes it
+            # authoritative over the inference, which is why the inference is deleted
+            # rather than downweighted; it does not make it more evidence than it is.
+            confidence=confidence_from_evidence(1, layer="elicited"),
         )
-        inferred_path.unlink(missing_ok=True)
-        return {"status": "corrected", "written": {"path": str(written), "layer": "elicited"}, "deleted": True}
+        deleted = _retire_inferred(inferred_path, written)
+        return {"status": "corrected", "written": {"path": str(written), "layer": "elicited"}, "deleted": deleted}
 
     written = vault.write_persona_fact(
         title=title,
@@ -181,7 +203,9 @@ def confirm_inference(
         reason=f"{user}: confirmed inference",
         layer="elicited",
         source="inference confirmation",
-        confidence=0.85,
+        # Two things stand behind a confirmed inference: what Kit inferred, and the
+        # person agreeing when it was put to them (5.7).
+        confidence=confidence_from_evidence(2, layer="elicited"),
     )
-    inferred_path.unlink(missing_ok=True)
-    return {"status": "confirmed", "message": plain, "written": {"path": str(written), "layer": "elicited"}, "deleted": True}
+    deleted = _retire_inferred(inferred_path, written)
+    return {"status": "confirmed", "message": plain, "written": {"path": str(written), "layer": "elicited"}, "deleted": deleted}

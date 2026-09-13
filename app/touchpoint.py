@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from kit.vault import Vault
+from mind import memory
 
 MEDIA_DIMENSIONS = {
     "music": {
@@ -295,31 +296,28 @@ class Touchpoint:
 
     @staticmethod
     def is_durable_fact(text: str) -> bool:
-        cleaned = _normalize_text(text)
-        if len(cleaned.split()) < 6:
-            return False
-        durable_patterns = [
-            r"\b(i (like|love|prefer|avoid|enjoy|am into|keep coming back to|habitually|mostly|usually)\b)",
-            r"\b(i (listen to|watch|play|read|seek out|return to)\b)",
-            r"\b(i'm into|i am into|i tend to|i usually|i mostly)\b",
-        ]
-        return any(re.search(pattern, cleaned, flags=re.IGNORECASE) for pattern in durable_patterns)
+        # One definition of a durable statement, in the module that files them. Two
+        # would drift, and a fact kept by one path and dropped by the other is worse
+        # than either rule on its own.
+        return memory.is_durable_statement(text)
 
     def capture_durable_fact(self, user_message: str, *, session_id: str | None = None) -> Path | None:
-        message = _normalize_text(user_message)
-        if not self.is_durable_fact(message):
-            return None
-        vault = self.vault or Vault(Path("vault"))
-        title = message[:80].strip().rstrip(".") or "User fact"
-        reason = (session_id or self.session_id) or "touchpoint"
-        return vault.write_persona_fact(
-            title=title,
-            content=message,
-            reason=reason,
-            layer="elicited",
+        """File what the user said through the same path the chat uses.
+
+        Confidence is computed from the evidence behind the fact rather than asserted
+        (5.10), so saying the same thing in a later session strengthens the note
+        instead of overwriting it at a fixed value.
+        """
+        session = (session_id or self.session_id) or "touchpoint"
+        written = memory.record_statement(
+            self.vault or Vault(Path("vault")),
+            self.user,
+            user_message,
+            session_id=session,
+            reason=session,
             source="touchpoint",
-            confidence=0.8,
         )
+        return Path(written["path"]) if written else None
 
     def to_dict(self) -> dict[str, Any]:
         return {

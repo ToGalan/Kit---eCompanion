@@ -72,3 +72,37 @@ def test_durable_fact_from_touchpoint_is_written_to_persona_vault(tmp_path):
     fact_text = result.read_text(encoding="utf-8")
     assert "layer: elicited" in fact_text
     assert touchpoint.vault.history(result.stem, "persona")[0]["reason"] == "session-2"
+
+
+def test_a_repeated_touchpoint_fact_accumulates_instead_of_being_fixed(tmp_path):
+    """5.10: the touchpoint shares the computed write path rather than asserting 0.8."""
+    from kit.vault import Vault, parse_frontmatter
+    from mind.memory import confidence_from_evidence
+
+    store = TouchpointStore(db_path=tmp_path / "touchpoints.db")
+    vault = Vault(tmp_path / "vault")
+    statement = "I mostly listen to jazz and ambient music at night, and I keep returning to calm sets."
+
+    def capture(session_id: str):
+        touchpoint = Touchpoint(
+            user="alice",
+            session_id=session_id,
+            goal="What music has been in rotation lately?",
+            days_since_contact=3,
+            persona_snapshot={"elicited": []},
+            recent_signals=[],
+            vault=vault,
+            store=store,
+        )
+        return touchpoint.capture_durable_fact(statement, session_id=session_id)
+
+    first = capture("session-1")
+    first_confidence = float(parse_frontmatter(first.read_text(encoding="utf-8"))["confidence"])
+    second = capture("session-2")
+    second_confidence = float(parse_frontmatter(second.read_text(encoding="utf-8"))["confidence"])
+
+    assert first_confidence == confidence_from_evidence(1, layer="elicited")
+    assert second_confidence == confidence_from_evidence(2, layer="elicited")
+    assert second_confidence > first_confidence
+    # Corroboration, not a duplicate note.
+    assert len(list((vault.path / "persona").glob("*.md"))) == 1
