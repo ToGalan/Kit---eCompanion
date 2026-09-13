@@ -1,0 +1,234 @@
+{
+  "args": {
+    "query": "What is Disco Elysium about"
+  },
+  "data": {
+    "artists": [
+      {
+        "id": "2d617a79-c916-418a-970d-2371f8b101fc",
+        "life-span": {
+          "ended": null
+        },
+        "name": "What Is",
+        "score": 100,
+        "sort-name": "What Is"
+      },
+      {
+        "id": "366f6906-18dd-4232-a419-54ad1ff2063c",
+        "life-span": {
+          "ended": null
+        },
+        "name": "What About Frank?",
+        "score": 95,
+        "sort-name": "What About Frank?"
+      },
+      {
+        "aliases": [
+          {
+            "begin-date": null,
+            "end-date": null,
+            "locale": null,
+            "name": "What U On About",
+            "primary": null,
+            "sort-name": "What U On About",
+            "type": "Search hint",
+            "type-id": "1937e404-b981-3cb7-8151-4c86ebfc8d8e"
+          }
+        ],
+        "area": {
+          "id": "5b8a5ee5-0bb3-34cf-9a75-c27c44e341fc",
+          "life-span": {
+            "ended": null
+          },
+          "name": "Belgium",
+          "sort-name": "Belgium",
+          "type": "Country",
+          "type-id": "06dd0ae4-8c74-30bb-b43d-95dcedf961de"
+        },
+        "begin-area": {
+          "id": "38f97ed2-6128-4da3-be1d-423d75331ff2",
+          "life-span": {
+            "ended": null
+          },
+          "name": "Leuven",
+          "sort-name": "Leuven",
+          "type": "City",
+          "type-id": "6fd8f29a-3d0a-32fc-980d-ea697b69da78"
+        },
+        "country": "BE",
+        "disambiguation": "Belgian DnB DJ collective",
+        "id": "0a0f310c-5070-4a14-b467-7b8e02940d77",
+        "life-span": {
+          "ended": null
+        },
+        "name": "What-U-On-About?!",
+        "score": 95,
+        "sort-name": "What-U-On-About?!",
+        "type": "Group",
+        "type-id": "e431f5f6-b5d2-343d-8b36-72607fffb74b"
+      },
+      {
+        "disambiguation": "made \"Geeks\"",
+        "id": "d7ee7b6e-a385-486b-8a47-9d45b2b7bd26",
+        "life-span": {
+          "ended": null
+        },
+        "name": "What About Penguins",
+        "score": 94,
+        "sort-name": "What About Penguins"
+      },
+      {
+        "area": {
+          "id": "5b8a5ee5-0bb3-34cf-9a75-c27c44e341fc",
+          "life-span": {
+            "ended": null
+          },
+          "name": "Belgium",
+          "sort-name": "Belgium",
+          "type": "Country",
+          "type-id": "06dd0ae4-8c74-30bb-b43d-95dcedf961de"
+        },
+        "country": "BE",
+        "disambiguation": "Belgian",
+        "id": "4f4be40a-79d1-46c2-b9bc-061c9fd0e43a",
+        "life-span": {
+          "ended": null
+        },
+        "name": "What About It",
+        "score": 94,
+        "sort-name": "What About It"
+      },
+      {
+        "id": "851f6c08-0660-475b-a6eb-7f5c0f8e72e8",
+        "life-span": {
+          "ended": null
+        },
+        "name": "WHAT ABOUT FLOWERS",
+        "score": 94,
+        "sort-name": "WHAT ABOUT FLOWERS"
+      },
+      {
+        "area": {
+          "id": "5b8a5ee5-0bb3-34cf-9a75-c27c44e341fc",
+          "life-span": {
+            "ended": null
+          },
+          "name": "Belgium",
+          "sort-name": "Belgium",
+          "type": "Country",
+          "type-id": "06dd0ae4-8c74-30bb-b43d-95dcedf961de"
+        },
+        "begin-area": {
+          "id": "45125c6a-db29-4300-bd26-9ff9ed24a3e7",
+          "life-span": {
+            "ended": null
+          },
+          "name": "Ghent",
+          "sort-name": "Ghent",
+          "type": "City",
+          "type-id": "6fd8f29a-3d0a-32fc-980d-ea697b69da78"
+        },
+        "country": "BE",
+        "disambiguation": "Belgian indietronica band",
+        "id": "a3500803-a701-4de6-90de-4672aa10c77a",
+        "life-span": {
+          "begin": "2014",
+          "end": "2016",
+          "ended": true
+        },
+        "name": "What About Washington",
+        "score": 94,
+        "sort-name": "What About Washington",
+        "type": "Group",
+        "type-id": "e431f5f6-b5d2-343d-8b36-72607fffb74b"
+      },
+      {
+        "area": {
+          "id": "106e0bec-b638-3b37-b731-f53d507dc00e",
+          "life-span": {
+            "ended": null
+          },
+          "name": "Australia",
+          "sort-name": "Australia",
+          "type": "Country",
+          "type-id": "06dd0ae4-8c74-30bb-b43d-95dcedf961de"
+        },
+        "country": "AU",
+        "id": "ab507326-fa7f-4969-944f-b8e9517f3dd2",
+        "life-span": {
+          "ended": null
+        },
+        "name": "What About Tonight",
+        "score": 94,
+        "sort-name": "What About Tonight",
+        "type": "Group",
+        "type-id": "e431f5f6-b5d2-343d-8b36-72607fffb74b"
+      },
+      {
+        "area": {
+          "id": "afff1a94-a98b-4322-8874-3148139ab6da",
+          "life-span": {
+            "ended": null
+          },
+          "name": "Wien",
+          "sort-name": "Wien",
+          "type": "City",
+          "type-id": "6fd8f29a-3d0a-32fc-980d-ea697b69da78"
+        },
+        "begin-area": {
+          "id": "afff1a94-a98b-4322-8874-3148139ab6da",
+          "life-span": {
+            "ended": null
+          },
+          "name": "Wien",
+          "sort-name": "Wien",
+          "type": "City",
+          "type-id": "6fd8f29a-3d0a-32fc-980d-ea697b69da78"
+        },
+        "disambiguation": "indie pop band from Vienna",
+        "id": "7f9a00f8-d82d-4462-a184-d1d6f505cc85",
+        "life-span": {
+          "begin": "2025-04-12",
+          "ended": null
+        },
+        "name": "What About Emily?",
+        "score": 94,
+        "sort-name": "What About Emily?",
+        "type": "Group",
+        "type-id": "e431f5f6-b5d2-343d-8b36-72607fffb74b"
+      },
+      {
+        "area": {
+          "id": "4757b525-2a60-324a-b060-578765d2c993",
+          "life-span": {
+            "ended": null
+          },
+          "name": "Denmark",
+          "sort-name": "Denmark",
+          "type": "Country",
+          "type-id": "06dd0ae4-8c74-30bb-b43d-95dcedf961de"
+        },
+        "country": "DK",
+        "disambiguation": "Goa trance artist Kristian Thinning Andersen",
+        "gender": "male",
+        "gender-id": "36d3d30a-839d-3eda-8cb3-29be4384e4a9",
+        "id": "3eea7051-d7a4-45ab-8e35-b496129413f9",
+        "life-span": {
+          "ended": null
+        },
+        "name": "Elysium",
+        "score": 94,
+        "sort-name": "Elysium",
+        "type": "Person",
+        "type-id": "b6e035f4-3ce9-331c-97df-83397230b0df"
+      }
+    ],
+    "count": 9378,
+    "created": "2026-09-12T01:11:42.529Z",
+    "offset": 0
+  },
+  "fetched_at": "2026-09-12T01:11:41.828653+00:00",
+  "ok": true,
+  "source": "musicbrainz_lookup",
+  "tool": "musicbrainz_lookup"
+}

@@ -1,0 +1,12 @@
+{
+  "args": {
+    "fields": null,
+    "query": "What should I watch this weekend"
+  },
+  "data": {},
+  "error": "IGDB credentials are not configured; IGDB lookups are disabled.",
+  "fetched_at": "2026-09-12T01:08:59.606019+00:00",
+  "ok": false,
+  "source": "igdb_lookup",
+  "tool": "igdb_lookup"
+}

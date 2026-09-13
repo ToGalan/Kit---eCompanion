@@ -1,0 +1,12 @@
+{
+  "args": {
+    "fields": null,
+    "query": "What is Disco Elysium about"
+  },
+  "data": {},
+  "error": "IGDB credentials are not configured; IGDB lookups are disabled.",
+  "fetched_at": "2026-09-12T01:11:37.814265+00:00",
+  "ok": false,
+  "source": "igdb_lookup",
+  "tool": "igdb_lookup"
+}

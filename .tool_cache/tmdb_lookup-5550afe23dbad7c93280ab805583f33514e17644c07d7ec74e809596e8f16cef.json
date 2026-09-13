@@ -1,0 +1,12 @@
+{
+  "args": {
+    "media_type": null,
+    "query": "What should I watch this weekend"
+  },
+  "data": {},
+  "error": "TMDB_API_KEY is not configured; TMDB lookups are disabled.",
+  "fetched_at": "2026-09-12T01:08:59.607008+00:00",
+  "ok": false,
+  "source": "tmdb_lookup",
+  "tool": "tmdb_lookup"
+}
