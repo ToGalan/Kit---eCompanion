@@ -19,6 +19,10 @@ class Tool(Protocol):
         ...
 
 
+# MusicBrainz asks every client to identify itself and blocks those that do not.
+_USER_AGENT = os.getenv("KIT_USER_AGENT", "Kit-eCompanion/0.1 (https://github.com/ToGalan/Kit---eCompanion)")
+
+
 def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -235,24 +239,21 @@ class SteamCatalogTool(BaseTool):
         if cached is not None:
             return cached
 
-        key = os.getenv("STEAM_API_KEY")
-        if not key:
-            result = _result_payload(self.name, payload, {}, error="STEAM_API_KEY is not configured; Steam lookups are disabled.")
-            _write_cache(self.name, payload, result)
-            return result
-
+        # store.steampowered.com is the public storefront API and takes no key. The
+        # STEAM_API_KEY this used to demand is for the Web API (player data), which
+        # neither of these endpoints is, so requiring it disabled games for nothing.
         try:
             if payload["app_id"] is not None:
                 data = _http_json(
                     "https://store.steampowered.com/api/appdetails",
                     params={"appids": str(payload["app_id"])},
-                    headers={"Accept": "application/json", "X-API-Key": key},
+                    headers={"Accept": "application/json"},
                 )
             else:
                 data = _http_json(
                     "https://store.steampowered.com/api/storesearch",
-                    params={"term": str(payload["query"] or "")},
-                    headers={"Accept": "application/json", "X-API-Key": key},
+                    params={"term": str(payload["query"] or ""), "cc": os.getenv("KIT_STORE_REGION", "us"), "l": "english"},
+                    headers={"Accept": "application/json"},
                 )
             result = _result_payload(self.name, payload, data)
         except Exception as exc:
@@ -383,13 +384,6 @@ class AniListLookupTool(BaseTool):
             "query": "query($search: String) { Page(page:1, perPage:10) { media(search:$search, type: ANIME) { id title { romaji english } description format coverImage { large } } } }",
             "variables": {"search": query},
         }
-        try:
-            data = _http_json(
-                "https://graphql.anilist.co",
-                headers={"Content-Type": "application/json", "Accept": "application/json"},
-            )
-        except Exception:
-            data = {}
         # Avoid sending an empty query to the public API when the caller did not provide one.
         if not query:
             result = _result_payload(self.name, payload, {}, error="AniList query is empty.")
@@ -414,12 +408,12 @@ class AniListLookupTool(BaseTool):
 @dataclass
 class MusicBrainzLookupTool(BaseTool):
     name: str = "musicbrainz_lookup"
-    description: str = "Look up music metadata from MusicBrainz."
+    description: str = "Look up albums and releases from MusicBrainz."
     input_schema: dict[str, Any] = field(
         default_factory=lambda: {
             "type": "object",
             "properties": {
-                "query": {"type": "string", "description": "Artist or album title to search."},
+                "query": {"type": "string", "description": "Album, release or artist name to search."},
             },
             "additionalProperties": False,
         }
@@ -432,10 +426,12 @@ class MusicBrainzLookupTool(BaseTool):
             return cached
 
         try:
+            # Release groups, not artists: an artist is not something you can put on
+            # tonight. The artist name still matches here, and comes back credited.
             data = _http_json(
-                "https://musicbrainz.org/ws/2/artist/",
+                "https://musicbrainz.org/ws/2/release-group/",
                 params={"query": payload["query"] or "", "fmt": "json", "limit": "10"},
-                headers={"Accept": "application/json"},
+                headers={"Accept": "application/json", "User-Agent": _USER_AGENT},
             )
             result = _result_payload(self.name, payload, data)
         except Exception as exc:

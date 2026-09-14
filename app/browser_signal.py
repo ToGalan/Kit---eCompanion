@@ -19,7 +19,7 @@ from pydantic import BaseModel
 
 from app.touchpoint import Touchpoint, TouchpointStore
 from kit.vault import Occasion, parse_evidence
-from mind import memory
+from mind import discovery, memory
 from mind.ai import Opus5Gateway
 from mind.obsidian_brain import ObsidianBrain
 from mind.voice import kit_system_prompt, validate_voice_copy
@@ -679,13 +679,34 @@ def chat(payload: dict[str, Any], user: str = Depends(get_authenticated_user)) -
     # Kit said, and the vault is the record.
     recalled = memory.recall(vault, user, session_id=session_id, occasion=occasion)
 
+    # When they are asking for something to watch, play or listen to, search the
+    # catalogues before answering. The model may only name what a provider confirmed
+    # (4.5), so the shortlist is part of the instruction rather than a suggestion.
+    found: dict[str, Any] = {"matches": [], "unavailable": {}}
+    asking_for_something = discovery.wants_a_recommendation(message)
+    if asking_for_something:
+        try:
+            found = discovery.shortlist(
+                {"elicited": recalled["facts"], "active_hypotheses": recalled["hypotheses"]},
+                message,
+                occasion=occasion,
+            )
+        except Exception:
+            # A catalogue outage degrades the turn to conversation; it does not fail it.
+            logger.warning("candidate retrieval failed for user %s", user, exc_info=True)
+            found = {"matches": [], "unavailable": {"catalogues": "lookup failed"}}
+
+    system_parts = [kit_system_prompt(), memory.memory_block(recalled)]
+    if asking_for_something:
+        system_parts.append(discovery.shortlist_block(found))
+
     try:
         # The voice spec is given to the model, not only enforced afterwards. Without it
         # the model opens with the menus and capability lists VOICE.md rules 1-4 ban, and
         # the guard then discards a perfectly reasonable answer.
         answer = Opus5Gateway().converse(
             memory.conversation_messages(recalled) + [{"role": "user", "content": message}],
-            system="\n\n---\n\n".join([kit_system_prompt(), memory.memory_block(recalled)]),
+            system="\n\n---\n\n".join(system_parts),
         )
     except Exception:
         # The exception text can carry backend detail and configuration; it belongs in the
@@ -723,7 +744,14 @@ def chat(payload: dict[str, Any], user: str = Depends(get_authenticated_user)) -
         logger.warning("could not record the exchange for user %s", user, exc_info=True)
         recorded = {"recorded": False, "reason": "write failed", "facts": []}
 
-    return {"ok": True, "message": answer, "session_id": session_id, "memory": recorded}
+    return {
+        "ok": True,
+        "message": answer,
+        "session_id": session_id,
+        "memory": recorded,
+        "candidates": found["matches"],
+        "unreachable": found["unavailable"],
+    }
 
 
 @app.get("/chat/memory")

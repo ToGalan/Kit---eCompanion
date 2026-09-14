@@ -9,7 +9,7 @@ before changing matching, storage, conversation or the creature. Clauses marked
 `[open]` name work that is deliberately undecided. [VOICE.md](VOICE.md) is
 downstream of it and is enforced at runtime by `mind/voice.py`.
 
-This repository is a stubbed prototype and research scaffold, not a finished recommendation engine or production catalog integration. The browser signal layer captures domain-level hits and the app keeps an evidence-first reasoning loop, but the real provider integrations and model-backed matching are still planned rather than complete.
+This repository is a working prototype rather than a finished product. Conversation, vault-backed memory and persona accumulation are live, and a request for something to watch, play or listen to is answered from catalogue sources that confirmed the title exists. What is not yet built: hypotheses formed from episodes, outcome capture after an offer, and the measurement loop that clause 1.2 defines success by.
 
 ## Signal sources today vs planned
 
@@ -56,6 +56,28 @@ python -m pytest -q
 npm test -- --run
 ```
 
+## Catalogue sources
+
+A recommendation only reaches you if a provider confirmed the title exists (4.5), so
+what Kit can offer depends on which sources are reachable. Three work with no
+configuration at all:
+
+| Domain | Source | Configuration |
+|---|---|---|
+| Games | Steam storefront | none |
+| Anime | AniList | none |
+| Music | MusicBrainz | none |
+| Film, TV | TMDB | `TMDB_API_KEY` |
+| Games (extra) | IGDB | `TWITCH_CLIENT_ID`, `TWITCH_CLIENT_SECRET` |
+| Web context | Brave, SerpAPI or Tavily | `BRAVE_API_KEY`, `SERPAPI_API_KEY` or `TAVILY_API_KEY` |
+
+A source that is missing its key, or that times out, removes its domain from that
+request and Kit says so rather than guessing in its place (4.7). Responses are cached
+under `.tool_cache/` by volatility: a week for catalogue metadata, two hours for web
+search. Set `KIT_STORE_REGION` (default `us`) for Steam pricing and availability, and
+`KIT_USER_AGENT` to identify this deployment to MusicBrainz, which rate-limits clients
+that do not identify themselves.
+
 ## Memory
 
 Chat memory is the vault. Every exchange is written to
@@ -79,7 +101,7 @@ temporary directory so a run never touches the repository.
 
 The vault is markdown on disk and intentionally compatible with Obsidian. The app is designed to treat the Markdown files as the source of truth rather than as a database layer.
 
-This is a stubbed prototype: some UI and backend scaffolding exists, but not all provider integrations, recommendation features, or inference pipelines are live yet.
+Games, anime and music resolve against live sources with no configuration; film and TV need a TMDB key. The inference pipeline — hypotheses, confirmation, outcomes — is the part that is still scaffolding.
 
 ## Embeddings
 

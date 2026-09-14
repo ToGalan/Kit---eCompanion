@@ -171,3 +171,103 @@ def test_recorded_signal_compiles_into_observed_persona_facts():
 
     recalled = client.get("/chat/memory", headers=headers).json()
     assert any(fact["layer"] == "observed" for fact in recalled["facts"])
+
+
+def test_chat_route_hands_the_model_only_verified_titles(monkeypatch):
+    """4.5: the model may name what a provider confirmed, and nothing else."""
+    client = TestClient(app)
+    headers = {"Authorization": f"Bearer {make_session_token('offer-user')}"}
+    seen: dict[str, object] = {}
+
+    def fake_converse(_self, messages, **kwargs):
+        seen["system"] = kwargs.get("system")
+        return "Hades fits a short weeknight. It would be wrong if you wanted something calmer."
+
+    monkeypatch.setattr("app.browser_signal.Opus5Gateway.converse", fake_converse)
+
+    class _Steam:
+        """Behaves like the real tool: a query searches, an app id returns detail."""
+
+        name = "steam_catalog"
+
+        def run(self, **kwargs):
+            envelope = {
+                "tool": "steam_catalog",
+                "source": "steam_catalog",
+                "fetched_at": "2026-09-14T10:00:00+00:00",
+                "args": kwargs,
+                "ok": True,
+            }
+            if kwargs.get("app_id"):
+                return envelope | {
+                    "data": {
+                        "1145360": {
+                            "success": True,
+                            "data": {
+                                "steam_appid": 1145360,
+                                "name": "Hades",
+                                "short_description": "A cozy, relaxing run-based game.",
+                                "genres": [{"description": "Indie"}],
+                                "release_date": {"coming_soon": False, "date": "17 Sep, 2020"},
+                            },
+                        }
+                    }
+                }
+            return envelope | {"data": {"items": [{"id": 1145360, "name": "Hades"}]}}
+
+    monkeypatch.setattr("mind.candidates.DEFAULT_TOOLS", {"steam_catalog": _Steam()}, raising=False)
+    monkeypatch.setattr("mind.tools.DEFAULT_TOOLS", {"steam_catalog": _Steam()})
+
+    # A first turn so the persona is not empty: with nothing recorded there is nothing
+    # to rank against, and an honest empty is the correct answer (8.2).
+    client.post(
+        "/chat",
+        json={"message": "I like cozy low-stimulation games when I want to decompress.", "session_id": "offer-user-test"},
+        headers=headers,
+    )
+
+    response = client.post(
+        "/chat",
+        json={"message": "what should i play tonight? something cozy", "session_id": "offer-user-test"},
+        headers=headers,
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    system = str(seen["system"])
+    assert "Hades" in system
+    assert "https://store.steampowered.com/app/1145360/" in system
+    assert "You may name these and nothing else" in system
+    # The retrieved shortlist is reported back, so the UI can show what it rested on.
+    assert [item["title"] for item in body["candidates"]] == ["Hades"]
+
+
+def test_chat_route_tells_the_model_to_stay_empty_when_nothing_verifies(monkeypatch):
+    """8.2: an honest empty is correct output; a remembered title is not."""
+    client = TestClient(app)
+    headers = {"Authorization": f"Bearer {make_session_token('empty-user')}"}
+    seen: dict[str, object] = {}
+
+    monkeypatch.setattr(
+        "app.browser_signal.Opus5Gateway.converse",
+        lambda _self, messages, **kwargs: seen.update(system=kwargs.get("system")) or "I don't have one yet.",
+    )
+
+    class _Dead:
+        name = "steam_catalog"
+
+        def run(self, **_kwargs):
+            raise RuntimeError("provider unreachable")
+
+    monkeypatch.setattr("mind.tools.DEFAULT_TOOLS", {"steam_catalog": _Dead()})
+
+    response = client.post(
+        "/chat",
+        json={"message": "recommend me a game", "session_id": "empty-user-test"},
+        headers=headers,
+    )
+
+    system = str(seen["system"])
+    assert "No title could be confirmed" in system
+    assert "never hedged" in system
+    assert response.json()["candidates"] == []
