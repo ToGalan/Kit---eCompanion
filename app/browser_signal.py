@@ -20,14 +20,14 @@ from pydantic import BaseModel
 from app.touchpoint import Touchpoint, TouchpointStore
 from kit.vault import Occasion, parse_evidence
 from mind import memory
-from mind.ai import Opus5Gateway
+from mind.ai import GeminiGateway
 from mind.obsidian_brain import ObsidianBrain
 from mind.voice import kit_system_prompt, validate_voice_copy
 
 logger = logging.getLogger(__name__)
 
 CHAT_UNAVAILABLE = (
-    "The live AI is unavailable right now. Configure ANTHROPIC_API_KEY or check the backend model connection."
+    "The live AI is unavailable right now. Configure GEMINI_API_KEY or check the backend model connection."
 )
 
 MEDIA_DOMAINS = {
@@ -683,7 +683,7 @@ def chat(payload: dict[str, Any], user: str = Depends(get_authenticated_user)) -
         # The voice spec is given to the model, not only enforced afterwards. Without it
         # the model opens with the menus and capability lists VOICE.md rules 1-4 ban, and
         # the guard then discards a perfectly reasonable answer.
-        answer = Opus5Gateway().converse(
+        answer = GeminiGateway().converse(
             memory.conversation_messages(recalled) + [{"role": "user", "content": message}],
             system="\n\n---\n\n".join([kit_system_prompt(), memory.memory_block(recalled)]),
         )

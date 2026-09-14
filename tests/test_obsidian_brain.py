@@ -1,6 +1,6 @@
 import pytest
 
-from mind.ai import Opus5Gateway
+from mind.ai import DEFAULT_MODEL, GeminiGateway
 from mind.obsidian_brain import ObsidianBrain
 
 
@@ -76,14 +76,16 @@ def test_route_treats_a_question_about_a_claim_as_a_question(tmp_path):
     assert brain.route("") == "question"
 
 
-def test_opus_gateway_falls_back_cleanly_without_api_key(monkeypatch):
+def test_gemini_gateway_falls_back_cleanly_without_api_key(monkeypatch):
     # The gateway reads the key from the environment when none is passed, so the
     # "without a key" case has to remove it rather than rely on it being absent.
-    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-    gateway = Opus5Gateway(api_key=None)
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+    monkeypatch.delenv("GEMINI_MODEL", raising=False)
+    gateway = GeminiGateway(api_key=None)
     plan = gateway.plan("Summarize this claim")
 
-    assert plan["model"] == "claude-opus-5"
+    assert plan["model"] == DEFAULT_MODEL
     assert plan["offline"] is True
     assert "evidence-first" in plan["strategy"]
 

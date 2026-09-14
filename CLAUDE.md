@@ -53,9 +53,10 @@ changing PRINCIPLES.md first is a defect.
   values from the evidence count. `_HIGH_CONFIDENCE` there is a decision threshold,
   not an asserted confidence.
 - **No sampling parameters on the gateway.** `mind/ai.py:SAMPLING_PARAMETERS` names
-  what Opus 5 rejects with a 400. A `temperature` in the payload fails every
-  request, and the chat route reports that failure to the user as "the live AI is
-  unavailable". Tune depth with effort instead.
+  the samplers the Gemini gateway must never send. Gemini 3 models are tuned for
+  their default sampling, and lowering `temperature` causes looping and degraded
+  reasoning. That failure is silent: nothing errors, the answers just get worse.
+  Tune depth with `effort`, which maps to Gemini's thinking level.
 
 ## Things that look like improvements and are not
 
@@ -79,3 +80,6 @@ npm run dev                  # backend on 8002 and frontend on 5175, together
 `npm run dev` needs Python 3.12+ and starts both halves; `dev:api` and `dev:web` run
 them separately. Ports live in `KIT_API_PORT` / `KIT_WEB_PORT`, read by both
 `vite.config.ts` and `scripts/dev.mjs` — do not hardcode a port in one of them.
+
+The model is Gemini, called over REST from `mind/ai.py`. Put `GEMINI_API_KEY` in
+`.env` (gitignored); `GEMINI_MODEL` overrides `DEFAULT_MODEL`.

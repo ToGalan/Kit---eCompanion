@@ -1,4 +1,4 @@
-from .ai import Opus5Gateway
+from .ai import GeminiGateway
 from .brain import check_line, run_turn, validate_claim
 from .embeddings import DeterministicEmbedder, Embedder
 from .obsidian_brain import ObsidianBrain
@@ -10,5 +10,5 @@ __all__ = [
     "Embedder",
     "DeterministicEmbedder",
     "ObsidianBrain",
-    "Opus5Gateway",
+    "GeminiGateway",
 ]

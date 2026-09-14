@@ -74,7 +74,7 @@ def test_chat_route_uses_live_backend_path_and_not_a_static_prompt(monkeypatch):
 
     # Pinned to a stub so the assertion is about the route reaching the gateway, not
     # about whatever the live model happens to reply on the day the suite runs.
-    monkeypatch.setattr("app.browser_signal.Opus5Gateway.converse", fake_converse)
+    monkeypatch.setattr("app.browser_signal.GeminiGateway.converse", fake_converse)
 
     response = client.post("/chat", json={"message": "What should I watch this weekend?"}, headers=headers)
     assert response.status_code == 200
@@ -98,7 +98,7 @@ def test_chat_route_does_not_leak_backend_error_detail(monkeypatch):
     def _explode(*_args, **_kwargs):
         raise RuntimeError("sk-ant-secret-key rejected by https://internal.example/v1")
 
-    monkeypatch.setattr("app.browser_signal.Opus5Gateway.converse", _explode)
+    monkeypatch.setattr("app.browser_signal.GeminiGateway.converse", _explode)
 
     response = client.post("/chat", json={"message": "Anything good tonight?"}, headers=headers)
     assert response.status_code == 200
@@ -118,7 +118,7 @@ def test_chat_route_replays_earlier_turns_and_the_vault_state(monkeypatch):
         seen["system"] = kwargs.get("system")
         return "A 25-minute loop fits that."
 
-    monkeypatch.setattr("app.browser_signal.Opus5Gateway.converse", fake_converse)
+    monkeypatch.setattr("app.browser_signal.GeminiGateway.converse", fake_converse)
 
     first = client.post(
         "/chat",
@@ -141,7 +141,7 @@ def test_chat_memory_route_returns_what_was_recorded(monkeypatch):
     client = TestClient(app)
     headers = {"Authorization": f"Bearer {make_session_token('recall-user')}"}
     monkeypatch.setattr(
-        "app.browser_signal.Opus5Gateway.converse",
+        "app.browser_signal.GeminiGateway.converse",
         lambda _self, messages, **_kwargs: "Noted.",
     )
 

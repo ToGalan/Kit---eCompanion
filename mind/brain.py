@@ -4,7 +4,7 @@ import json
 import logging
 from typing import Any
 
-from mind.ai import Opus5Gateway
+from mind.ai import GeminiGateway
 from mind.tools import DEFAULT_TOOLS
 
 logger = logging.getLogger(__name__)
@@ -162,7 +162,7 @@ def run_turn(
     vault_limit: int = 5,
 ) -> dict[str, Any]:
     tool_map: dict[str, Any] = catalogs if catalogs else DEFAULT_TOOLS
-    gateway = Opus5Gateway()
+    gateway = GeminiGateway()
     vault_evidence = _vault_evidence(brain, question, seed_title=seed_title, limit=vault_limit)
     # Seeded from the vault, so a turn that never reaches the model still answers from
     # what the map holds instead of asserting there is nothing.

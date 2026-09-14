@@ -7,7 +7,7 @@ from typing import Any, Iterable
 
 from kit.vault import Vault, body_from_markdown, parse_frontmatter
 
-from .ai import Opus5Gateway
+from .ai import GeminiGateway
 from .embeddings import Embedder, cosine, shared_embedder
 
 logger = logging.getLogger(__name__)
@@ -79,7 +79,7 @@ class ObsidianBrain:
     def __init__(
         self,
         vault_root: str | Path | None = None,
-        model: Opus5Gateway | None = None,
+        model: GeminiGateway | None = None,
         *,
         vault: Vault | None = None,
         embedder: Embedder | None = None,
@@ -87,7 +87,7 @@ class ObsidianBrain:
     ):
         self.vault = vault if vault is not None else Vault(vault_root or "vault")
         self.vault_root = self.vault.path
-        self.model = model or Opus5Gateway()
+        self.model = model or GeminiGateway()
         # Real embeddings by default. Constructing an Embedder is cheap; the model only
         # loads on first embed, so nothing downloads until semantic mapping is used.
         self.embedder = embedder if embedder is not None else shared_embedder()
